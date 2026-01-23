@@ -1,0 +1,7 @@
+.mirror {
+    transform: scaleX(-1);
+}
+
+.aspect-video {
+    aspect-ratio: 16 / 9;
+}

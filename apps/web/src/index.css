@@ -1,0 +1,49 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+    --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+:root {
+    --bg-depth: #0a0a0a;
+    --bg-surface: #141414;
+    --bg-glass: rgba(20, 20, 20, 0.8);
+    --neon-primary: #7000ff;
+    --neon-secondary: #00b4d8;
+    --text-main: #ffffff;
+    --text-muted: #71717a;
+    color-scheme: dark;
+}
+
+body {
+    background-color: var(--bg-depth);
+    color: var(--text-main);
+    margin: 0;
+    min-height: 100vh;
+    font-family: var(--font-sans);
+}
+
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 99px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+.glass-panel {
+    background: var(--bg-glass);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}

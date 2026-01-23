@@ -1,0 +1,29 @@
+# ========================================
+# Photobooth AI - Development Commands
+# ========================================
+
+# 1. SETUP (Pertama kali)
+pnpm install
+cp .env.example .env
+
+# 2. START INFRASTRUCTURE (Redis & MinIO)
+cd infra/docker && docker-compose up -d
+
+# Buat bucket di MinIO:
+# Buka http://localhost:9001 -> Login minioadmin/minioadmin -> Create bucket "photobooth"
+
+# 3. RUN DEVELOPMENT
+
+# Semua sekaligus
+pnpm dev
+
+# Atau per service
+pnpm --filter @photobot/api dev      # http://localhost:3001
+pnpm --filter @photobot/worker dev   # Worker (background)
+pnpm --filter @photobot/web dev      # http://localhost:5173
+
+# 4. BUILD
+pnpm build
+
+# 5. STOP INFRASTRUCTURE
+cd infra/docker && docker-compose down

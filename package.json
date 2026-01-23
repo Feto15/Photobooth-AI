@@ -1,0 +1,16 @@
+{
+    "name": "photobooth-ai",
+    "version": "1.0.0",
+    "private": true,
+    "description": "Photobooth AI Monorepo",
+    "scripts": {
+        "dev": "pnpm --parallel dev",
+        "build": "pnpm -r build",
+        "test": "pnpm -r test",
+        "lint": "pnpm -r lint"
+    },
+    "devDependencies": {
+        "typescript": "^5.0.0",
+        "prettier": "^3.0.0"
+    }
+}
