@@ -10,6 +10,20 @@ import { config } from '../../config';
 import { StorageClient, JobDataSchema, CreateJobRequestSchema } from '@photobot/shared';
 import { logger } from '../../index';
 
+// Helper to get session data from Redis
+async function getSession(sessionId: string) {
+    const reverseKey = `sessionById:${sessionId}`;
+    const codeDataStr = await redis.get(reverseKey);
+    if (!codeDataStr) return null;
+
+    const { code } = JSON.parse(codeDataStr);
+    const sessionKey = `session:${code}`;
+    const sessionDataStr = await redis.get(sessionKey);
+    if (!sessionDataStr) return null;
+
+    return JSON.parse(sessionDataStr);
+}
+
 const router = Router();
 
 const upload = multer({
@@ -104,13 +118,13 @@ router.get('/', requireAuth, async (req: AuthRequest, res: Response) => {
                 jobId: job.id,
                 status: mapBullMQState(state),
                 progress: job.progress,
-                data: {
-                    eventId: job.data?.eventId,
-                    participantName: job.data?.participantName,
-                    participantCode: job.data?.participantCode,
-                    mode: job.data?.mode,
-                    styleId: job.data?.styleId,
-                },
+                 data: {
+                     eventId: job.data?.eventId,
+                     participantName: job.data?.participantName,
+                     participantWhatsapp: job.data?.participantWhatsapp,
+                     mode: job.data?.mode,
+                     styleId: job.data?.styleId,
+                 },
                 createdAt: job.timestamp ? new Date(job.timestamp).toISOString() : null,
                 hasOutput: !!job.returnvalue?.bestOutputKey,
             };
@@ -184,7 +198,30 @@ router.post('/', requireAuth, upload.single('image'), async (req: AuthRequest, r
             });
         }
 
-        const { eventId, participantName, participantCode, mode, styleId } = parseResult.data;
+        const { sessionId, eventId, mode, styleId } = parseResult.data;
+
+        // Fetch and validate session
+        const session = await getSession(sessionId);
+        if (!session) {
+            return res.status(400).json({
+                error: {
+                    code: 'SESSION_NOT_FOUND',
+                    message: 'Session not found or expired',
+                },
+            });
+        }
+
+        if (session.eventId !== eventId) {
+            return res.status(400).json({
+                error: {
+                    code: 'SESSION_EVENT_MISMATCH',
+                    message: 'Session event does not match request event',
+                },
+            });
+        }
+
+        const participantName = session.name;
+        const participantWhatsapp = session.whatsapp;
 
         // Validate image
         if (!req.file) {
@@ -221,7 +258,7 @@ router.post('/', requireAuth, upload.single('image'), async (req: AuthRequest, r
 
         // Idempotency check
         const idempotencyKey = req.headers['idempotency-key'] as string
-            || `${eventId}:${participantCode || participantName}:${sha256.substring(0, 16)}`;
+            || `${eventId}:${sessionId}:${sha256.substring(0, 16)}`;
 
         const existingJobId = await checkIdempotency(idempotencyKey);
         if (existingJobId) {
@@ -264,9 +301,10 @@ router.post('/', requireAuth, upload.single('image'), async (req: AuthRequest, r
 
         const jobData = {
             jobId,
+            sessionId,
             eventId,
             participantName,
-            participantCode,
+            participantWhatsapp,
             mode,
             styleId,
             providerType: 'kie' as const,
@@ -354,6 +392,7 @@ router.get('/:id', requireAuth, async (req, res) => {
                 data,
                 output,
                 failedReason: job.failedReason,
+                createdAt: job.timestamp ? new Date(job.timestamp).toISOString() : null,
             },
         });
     } catch (error: any) {

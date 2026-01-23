@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Zap, Fingerprint } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { Button, Input, Card } from '../../components/ui';
-import api from '../../services/api';
+import { login as loginRequest } from '../../lib/api';
 
 export const LoginPage: React.FC = () => {
     const [password, setPassword] = useState('');
@@ -18,8 +18,8 @@ export const LoginPage: React.FC = () => {
         setError('');
 
         try {
-            const response = await api.post('/auth/login', { password });
-            login(response.data.data.token);
+            const data = await loginRequest(password);
+            login(data.token);
             navigate('/');
         } catch (err: any) {
             setError(err.response?.data?.error?.message || 'Login gagal');

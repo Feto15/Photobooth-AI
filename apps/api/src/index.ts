@@ -7,6 +7,7 @@ import { config } from './config';
 import { redis } from './config/redis';
 import authRouter from './modules/auth/auth.controller';
 import jobsRouter from './modules/jobs/jobs.controller';
+import sessionsRouter from './modules/sessions/sessions.controller';
 import kieRouter from './modules/kie/kie.controller';
 
 export const logger = pino({
@@ -68,6 +69,7 @@ app.get('/health', async (req, res) => {
 });
 
 app.use('/auth', authRouter);
+app.use('/sessions', sessionsRouter);
 app.use('/jobs', jobsRouter);
 app.use('/api/kie', kieRouter);
 

@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Download, ChevronLeft, RefreshCcw, Loader2 } from 'lucide-react';
 import { Button, Card } from '../../components/ui';
-import api from '../../services/api';
+import { getJob, getJobDownloadUrl } from '../../lib/api';
 
 const StatusBadge = ({ status }: { status: string }) => {
     const colors: Record<string, string> = {
@@ -25,16 +25,15 @@ export const JobDetailPage: React.FC = () => {
     const navigate = useNavigate();
     const [elapsed, setElapsed] = useState(0);
 
-    const { data: jobResponse, refetch } = useQuery({
+    const { data: job, refetch } = useQuery({
         queryKey: ['job', id],
-        queryFn: () => api.get(`/jobs/${id}`),
+        queryFn: () => getJob(id as string),
         refetchInterval: (query) => {
-            const s = query?.state?.data?.data?.data?.status;
+            const s = query?.state?.data?.status;
             return (s === 'queued' || s === 'running') ? 1000 : false;
         },
     });
 
-    const job = jobResponse?.data?.data;
     const status = job?.status;
     const isProcessing = status === 'queued' || status === 'running';
 
@@ -46,8 +45,12 @@ export const JobDetailPage: React.FC = () => {
     }, [isProcessing]);
 
     const handleDownload = () => {
-        const token = localStorage.getItem('operator_token');
-        window.open(`${api.defaults.baseURL}/jobs/${id}/download?token=${token}`);
+        const signedUrl = job?.output?.[0]?.signedUrl;
+        if (signedUrl) {
+            window.open(signedUrl);
+        } else if (id) {
+            window.open(getJobDownloadUrl(id));
+        }
     };
 
     return (
@@ -96,11 +99,15 @@ export const JobDetailPage: React.FC = () => {
                 <div className="grid grid-cols-2 gap-4 text-sm">
                     <div>
                         <p className="text-zinc-500">Nama</p>
-                        <p className="text-white">{job?.participantName || 'Guest'}</p>
+                        <p className="text-white">{job?.data?.participantName || 'Guest'}</p>
+                    </div>
+                    <div>
+                        <p className="text-zinc-500">WhatsApp</p>
+                        <p className="text-white">{job?.data?.participantWhatsapp || '-'}</p>
                     </div>
                     <div>
                         <p className="text-zinc-500">Style</p>
-                        <p className="text-white">{job?.styleId || '-'}</p>
+                        <p className="text-white">{job?.data?.styleId || '-'}</p>
                     </div>
                     <div>
                         <p className="text-zinc-500">Created</p>

@@ -4,24 +4,21 @@ export const JobStatusSchema = z.enum(['queued', 'running', 'succeeded', 'failed
 export type JobStatus = z.infer<typeof JobStatusSchema>;
 
 export const CreateJobRequestSchema = z.object({
+    sessionId: z.string().uuid('sessionId must be a valid UUID'),
     eventId: z.string().min(1, 'eventId is required'),
-    participantName: z.string().min(2, 'participantName must be at least 2 characters').optional(),
-    participantCode: z.string().min(1, 'participantCode must not be empty').optional(),
     mode: z.string().min(1, 'mode is required'),
     styleId: z.string().min(1, 'styleId is required'),
     metadata: z.string().optional(), // JSON string for additional metadata
-}).refine(
-    (data) => data.participantName || data.participantCode,
-    { message: 'Either participantName or participantCode is required' }
-);
+});
 
 export type CreateJobRequest = z.infer<typeof CreateJobRequestSchema>;
 
 export const JobDataSchema = z.object({
     jobId: z.string().uuid().or(z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/)), // UUID or ULID
+    sessionId: z.string().uuid(),
     eventId: z.string().min(1),
-    participantName: z.string().optional(),
-    participantCode: z.string().optional(),
+    participantName: z.string(), // From session snapshot
+    participantWhatsapp: z.string(), // From session snapshot
     mode: z.string(),
     styleId: z.string(),
     providerType: z.enum(['kie', 'comfy']).default('kie'),

@@ -1,22 +1,26 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { RefreshCcw, Camera, User, Zap, Upload } from 'lucide-react';
+import { RefreshCcw, Camera, Zap, Upload, Search, CheckCircle2, X } from 'lucide-react';
 import { Button, Input, Card } from '../../components/ui';
-import api from '../../services/api';
+import { getSession, createJob, type SessionData } from '../../lib/api';
 
 const STYLES = [
-    { id: 'cyber', name: 'Cyber' },
-    { id: 'noir', name: 'Noir' },
-    { id: 'prism', name: 'Prism' },
-    { id: 'clay', name: 'Clay' },
+    { id: 'cyber', name: 'Cyber', prompt: 'cyberpunk style' },
+    { id: 'noir', name: 'Noir', prompt: 'black and white cinema' },
+    { id: 'prism', name: 'Prism', prompt: 'colorful glass reflections' },
+    { id: 'clay', name: 'Clay', prompt: '3d clay render' },
 ];
 
 export const CapturePage: React.FC = () => {
-    const [name, setName] = useState('');
+    const [code, setCode] = useState('');
+    const [sessionData, setSessionData] = useState<SessionData | null>(null);
     const [style, setStyle] = useState(STYLES[0].id);
     const [capturedImage, setCapturedImage] = useState<string | null>(null);
     const [uploading, setUploading] = useState(false);
     const [cameraActive, setCameraActive] = useState(false);
+    const [loadingSession, setLoadingSession] = useState(false);
+    const [sessionError, setSessionError] = useState('');
+    const [submitError, setSubmitError] = useState('');
 
     const videoRef = useRef<HTMLVideoElement>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -42,19 +46,26 @@ export const CapturePage: React.FC = () => {
     };
 
     const stopCamera = () => {
-        const stream = videoRef.current?.srcObject as MediaStream;
-        stream?.getTracks().forEach(t => t.stop());
+        if (videoRef.current?.srcObject) {
+            const stream = videoRef.current.srcObject as MediaStream;
+            stream.getTracks().forEach(t => t.stop());
+            videoRef.current.srcObject = null;
+        }
         setCameraActive(false);
     };
 
     const capture = () => {
         if (videoRef.current && canvasRef.current) {
             const ctx = canvasRef.current.getContext('2d');
-            canvasRef.current.width = videoRef.current.videoWidth;
-            canvasRef.current.height = videoRef.current.videoHeight;
-            ctx?.drawImage(videoRef.current, 0, 0);
-            setCapturedImage(canvasRef.current.toDataURL('image/jpeg'));
-            stopCamera();
+            if (ctx) {
+                canvasRef.current.width = videoRef.current.videoWidth;
+                canvasRef.current.height = videoRef.current.videoHeight;
+                ctx.translate(canvasRef.current.width, 0);
+                ctx.scale(-1, 1);
+                ctx.drawImage(videoRef.current, 0, 0);
+                setCapturedImage(canvasRef.current.toDataURL('image/jpeg', 0.9));
+                stopCamera();
+            }
         }
     };
 
@@ -72,123 +83,241 @@ export const CapturePage: React.FC = () => {
 
     const retake = () => {
         setCapturedImage(null);
-        if (fileInputRef.current) {
-            fileInputRef.current.value = '';
+        if (fileInputRef.current) fileInputRef.current.value = '';
+        startCamera();
+    };
+
+    const lookupSession = async (e?: React.FormEvent) => {
+        if (e) e.preventDefault();
+        if (code.length < 6) return;
+
+        setLoadingSession(true);
+        setSessionError('');
+        setSubmitError('');
+
+        try {
+            const session = await getSession(code.toUpperCase());
+            setSessionData(session);
+        } catch (err: any) {
+            console.error('Lookup error:', err);
+            setSessionError(err.response?.data?.error?.message || 'Kode tidak ditemukan');
+        } finally {
+            setLoadingSession(false);
         }
     };
 
     const submit = async () => {
-        if (!capturedImage) return;
+        if (!capturedImage || !sessionData) return;
         setUploading(true);
+        setSubmitError('');
         try {
             const blob = await (await fetch(capturedImage)).blob();
-            const fd = new FormData();
-            fd.append('image', blob, 'capture.jpg');
-            fd.append('eventId', 'live-event');
-            fd.append('participantName', name || 'Guest');
-            fd.append('mode', 'portrait');
-            fd.append('styleId', style);
+            const file = new File([blob], 'capture.jpg', { type: 'image/jpeg' });
 
-            const res = await api.post('/jobs', fd);
-            navigate(`/jobs/${res.data.data.jobId}`);
-        } catch (e) {
-            console.error('Submit error:', e);
+            const result = await createJob({
+                sessionId: sessionData.sessionId,
+                eventId: sessionData.eventId,
+                mode: 'portrait',
+                styleId: style,
+                image: file,
+            });
+
+            navigate(`/jobs/${result.jobId}`);
+        } catch (err: any) {
+            console.error('Submit error:', err);
+            const code = err.response?.data?.error?.code;
+            if (code === 'SESSION_NOT_FOUND' || code === 'SESSION_EVENT_MISMATCH') {
+                setSessionData(null);
+                setCode('');
+                setSessionError('Session expired atau tidak valid. Silakan lookup ulang.');
+            } else {
+                setSubmitError(err.response?.data?.error?.message || 'Gagal submit job. Coba lagi.');
+            }
         } finally {
             setUploading(false);
         }
     };
 
     return (
-        <div className="max-w-2xl mx-auto space-y-6">
-            <div>
-                <h1 className="text-2xl font-bold text-white">Capture Photo</h1>
-                <p className="text-zinc-500 text-sm">Ambil foto dan pilih style AI</p>
-            </div>
-
-            <Card className="space-y-4">
-                <Input
-                    label="Nama Peserta"
-                    placeholder="Masukkan nama (opsional)"
-                    value={name}
-                    onChange={e => setName(e.target.value)}
-                    icon={<User size={18} />}
-                />
-
-                <div className="space-y-2">
-                    <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider ml-1">
-                        Style
-                    </label>
-                    <div className="grid grid-cols-4 gap-2">
-                        {STYLES.map(s => (
-                            <button
-                                key={s.id}
-                                onClick={() => setStyle(s.id)}
-                                className={`p-3 rounded-xl border text-sm font-medium transition-colors ${
-                                    style === s.id
-                                        ? 'border-white bg-white/10 text-white'
-                                        : 'border-white/10 text-zinc-400 hover:border-white/20'
-                                }`}
-                            >
-                                <Zap size={16} className="mx-auto mb-1" />
-                                {s.name}
-                            </button>
-                        ))}
+        <div className="max-w-4xl mx-auto px-4 py-8 space-y-8 animate-in fade-in duration-700">
+            <header className="flex justify-between items-end">
+                <div>
+                    <h1 className="text-3xl font-black text-white tracking-tight">BOOTH<span className="text-indigo-500">CAPTURE</span></h1>
+                    <p className="text-zinc-500 font-medium">Operator Console — Phase 2 Flow</p>
+                </div>
+                <div className="flex gap-2">
+                    <div className="flex items-center gap-1.5 px-3 py-1 bg-green-500/10 rounded-full border border-green-500/20">
+                        <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                        <span className="text-[10px] font-bold text-green-500 uppercase tracking-wider">Live System</span>
                     </div>
                 </div>
-            </Card>
+            </header>
 
-            <Card>
-                <div className="aspect-video bg-black rounded-xl overflow-hidden relative min-h-[300px]">
-                    {!cameraActive && !capturedImage ? (
-                        <div className="absolute inset-0 flex flex-col items-center justify-center gap-4">
-                            <Button onClick={startCamera}>
-                                <Camera size={18} /> Mulai Kamera
-                            </Button>
-                            <span className="text-zinc-500 text-sm">atau</span>
-                            <Button variant="secondary" onClick={() => fileInputRef.current?.click()}>
-                                <Upload size={18} /> Upload Foto
-                            </Button>
-                            <input
-                                ref={fileInputRef}
-                                type="file"
-                                accept="image/jpeg,image/png,image/webp"
-                                onChange={handleFileUpload}
-                                style={{ display: 'none' }}
-                            />
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                {/* Left Column: Session & Styles */}
+                <div className="lg:col-span-4 space-y-6">
+                    <Card className="border-zinc-800 bg-zinc-900/50 backdrop-blur-xl">
+                        <h2 className="text-xs font-bold text-zinc-500 uppercase tracking-[0.2em] mb-4">1. Identify Session</h2>
+                        {!sessionData ? (
+                            <form onSubmit={lookupSession} className="space-y-4">
+                                <Input
+                                    placeholder="ENTER 6-DIGIT CODE"
+                                    value={code}
+                                    onChange={e => setCode(e.target.value.toUpperCase())}
+                                    error={sessionError}
+                                    icon={<Search size={18} className="text-zinc-500" />}
+                                    maxLength={6}
+                                    className="bg-zinc-800/80 font-mono text-xl tracking-[0.3em] uppercase py-4 text-center placeholder:tracking-normal placeholder:font-sans placeholder:text-sm"
+                                />
+                                <Button
+                                    type="submit"
+                                    isLoading={loadingSession}
+                                    className="w-full py-6 rounded-xl bg-white text-black hover:bg-zinc-200"
+                                    disabled={code.length !== 6 || loadingSession}
+                                >
+                                    Verify Code
+                                </Button>
+                            </form>
+                        ) : (
+                            <div className="animate-in zoom-in-95 duration-300">
+                                <div className="p-4 rounded-2xl bg-indigo-500/10 border border-indigo-500/30 mb-4 relative group">
+                                    <button
+                                        onClick={() => { setSessionData(null); setCode(''); setSessionError(''); setSubmitError(''); }}
+                                        className="absolute top-2 right-2 p-1 text-zinc-500 hover:text-white transition-colors"
+                                    >
+                                        <X size={16} />
+                                    </button>
+                                    <div className="flex items-center gap-4">
+                                        <div className="w-12 h-12 bg-indigo-500 text-white rounded-xl flex items-center justify-center shadow-lg shadow-indigo-500/20">
+                                            <CheckCircle2 size={24} />
+                                        </div>
+                                        <div className="overflow-hidden">
+                                            <div className="text-white font-bold truncate">{sessionData.name}</div>
+                                            <div className="text-indigo-400 text-xs font-mono">{sessionData.whatsapp}</div>
+                                            <div className="text-zinc-500 text-[10px] mt-1">Event: {sessionData.eventId}</div>
+                                        </div>
+                                    </div>
+                                </div>
+                                {submitError && (
+                                    <div className="text-red-400 text-xs text-center mb-2">{submitError}</div>
+                                )}
+                                <div className="text-[10px] font-bold text-zinc-600 uppercase tracking-widest text-center">Session Active</div>
+                            </div>
+                        )}
+                    </Card>
+
+                    <Card className="border-zinc-800 bg-zinc-900/50 backdrop-blur-xl">
+                        <h2 className="text-xs font-bold text-zinc-500 uppercase tracking-[0.2em] mb-4">2. Select AI Style</h2>
+                        <div className="grid grid-cols-2 gap-3">
+                            {STYLES.map(s => (
+                                <button
+                                    key={s.id}
+                                    onClick={() => setStyle(s.id)}
+                                    className={`p-4 rounded-2xl border-2 transition-all duration-300 flex flex-col items-center gap-2 group ${style === s.id
+                                            ? 'border-indigo-500 bg-indigo-500/10 text-white shadow-[0_0_20px_rgba(99,102,241,0.2)]'
+                                            : 'border-zinc-800 bg-zinc-800/20 text-zinc-500 hover:border-zinc-700'
+                                        }`}
+                                >
+                                    <div className={`p-2 rounded-xl transition-colors ${style === s.id ? 'bg-indigo-500 text-white' : 'bg-zinc-800 text-zinc-500 group-hover:bg-zinc-700'}`}>
+                                        <Zap size={18} />
+                                    </div>
+                                    <span className="text-xs font-bold uppercase tracking-wider">{s.name}</span>
+                                </button>
+                            ))}
                         </div>
-                    ) : capturedImage ? (
-                        <img src={capturedImage} className="absolute inset-0 w-full h-full object-cover" alt="Captured" />
-                    ) : (
-                        <video
-                            ref={videoRef}
-                            autoPlay
-                            playsInline
-                            muted
-                            style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }}
-                        />
-                    )}
-                    <canvas ref={canvasRef} style={{ display: 'none' }} />
+                    </Card>
                 </div>
 
-                <div className="flex gap-3 mt-4">
-                    {!capturedImage && cameraActive && (
-                        <Button onClick={capture} className="flex-1">
-                            <Camera size={18} /> Capture
-                        </Button>
-                    )}
+                {/* Right Column: Camera View */}
+                <div className="lg:col-span-8 flex flex-col gap-6">
+                    <Card className="p-0 border-zinc-800 bg-black overflow-hidden relative group">
+                        <div className="absolute top-4 left-4 z-20 flex items-center gap-2 px-3 py-1 bg-black/50 backdrop-blur-md rounded-full border border-white/10">
+                            <div className="w-1.5 h-1.5 bg-red-500 rounded-full animate-pulse" />
+                            <span className="text-[10px] font-bold text-white uppercase tracking-widest">Webcam Feed</span>
+                        </div>
 
-                    {capturedImage && (
-                        <>
-                            <Button variant="secondary" onClick={retake} className="flex-1">
-                                <RefreshCcw size={18} /> Retake
-                            </Button>
-                            <Button onClick={submit} isLoading={uploading} className="flex-1">
-                                Submit Job
-                            </Button>
-                        </>
+                        <div className="aspect-[16/9] relative bg-zinc-950 flex items-center justify-center">
+                            {!cameraActive && !capturedImage ? (
+                                <div className="flex flex-col items-center gap-6 p-8 text-center animate-in fade-in duration-500">
+                                    <div className="w-20 h-20 bg-zinc-900 rounded-full flex items-center justify-center text-zinc-700 mb-2">
+                                        <Camera size={40} />
+                                    </div>
+                                    <div>
+                                        <h3 className="text-white font-bold text-xl mb-1">Ready to Capture?</h3>
+                                        <p className="text-zinc-500 text-sm max-w-xs mx-auto">Click below to start the camera or upload a photo from device</p>
+                                    </div>
+                                    <div className="flex gap-4">
+                                        <Button onClick={startCamera} className="bg-white text-black py-4 px-8 rounded-2xl font-bold flex gap-2">
+                                            <Camera size={20} /> Start Camera
+                                        </Button>
+                                        <Button variant="secondary" onClick={() => fileInputRef.current?.click()} className="bg-zinc-800/80 py-4 px-8 rounded-2xl flex gap-2">
+                                            <Upload size={20} /> Upload
+                                        </Button>
+                                    </div>
+                                    <input
+                                        ref={fileInputRef}
+                                        type="file"
+                                        accept="image/jpeg,image/png,image/webp"
+                                        onChange={handleFileUpload}
+                                        className="hidden"
+                                    />
+                                </div>
+                            ) : capturedImage ? (
+                                <img src={capturedImage} className="w-full h-full object-cover animate-in zoom-in duration-500" alt="Captured" />
+                            ) : (
+                                <video
+                                    ref={videoRef}
+                                    autoPlay
+                                    playsInline
+                                    muted
+                                    className="w-full h-full object-cover mirror-x"
+                                    style={{ transform: 'scaleX(-1)' }}
+                                />
+                            )}
+
+                            <canvas ref={canvasRef} className="hidden" />
+                        </div>
+
+                        {/* Camera Controls Overlay */}
+                        {(cameraActive || capturedImage) && (
+                            <div className="p-6 bg-zinc-900/90 backdrop-blur-xl border-t border-zinc-800 flex items-center justify-between">
+                                <div className="flex gap-4 flex-1">
+                                    {cameraActive && !capturedImage && (
+                                        <Button onClick={capture} className="flex-1 py-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl font-black text-lg tracking-wider flex gap-3 shadow-[0_0_30px_rgba(79,70,229,0.3)]">
+                                            <Camera size={24} /> CAPTURE
+                                        </Button>
+                                    )}
+
+                                    {capturedImage && (
+                                        <>
+                                            <Button variant="secondary" onClick={retake} className="flex-1 py-4 bg-zinc-800 hover:bg-zinc-700 text-white rounded-2xl font-bold flex gap-2">
+                                                <RefreshCcw size={20} /> Retake Photo
+                                            </Button>
+                                            <Button
+                                                onClick={submit}
+                                                isLoading={uploading}
+                                                className={`flex-1 py-4 rounded-2xl font-black text-lg tracking-wider flex gap-3 shadow-lg ${!sessionData ? 'bg-zinc-700 cursor-not-allowed' : 'bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500'}`}
+                                                disabled={!sessionData || uploading}
+                                            >
+                                                <Zap size={24} /> {uploading ? 'UPLOADING...' : 'GENERATE AI'}
+                                            </Button>
+                                        </>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+                    </Card>
+
+                    {!sessionData && (
+                        <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-2xl flex items-center gap-3 text-amber-500">
+                            <div className="w-10 h-10 bg-amber-500/20 rounded-xl flex items-center justify-center flex-shrink-0">
+                                <Search size={20} />
+                            </div>
+                            <p className="text-sm font-medium">Please verify a session code before generating the AI effect.</p>
+                        </div>
                     )}
                 </div>
-            </Card>
+            </div>
         </div>
     );
 };

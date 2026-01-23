@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { MainLayout } from './layouts/MainLayout';
 import { LoginPage } from './pages/auth/LoginPage';
+import { TenantPage } from './pages/tenant/TenantPage';
 import { CapturePage } from './pages/jobs/CapturePage';
 import { JobDetailPage } from './pages/jobs/JobDetailPage';
 
@@ -26,6 +27,7 @@ const App: React.FC = () => {
                 <BrowserRouter>
                     <Routes>
                         <Route path="/login" element={<LoginPage />} />
+                        <Route path="/_tenant" element={<TenantPage />} />
 
                         <Route
                             path="/"
