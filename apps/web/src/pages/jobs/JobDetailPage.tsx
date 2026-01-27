@@ -63,7 +63,7 @@ export const JobDetailPage: React.FC = () => {
                     <h1 className="text-xl font-bold text-white">Job Detail</h1>
                     <p className="text-zinc-500 text-sm font-mono">{id}</p>
                 </div>
-                <StatusBadge status={status} />
+                <StatusBadge status={status || 'queued'} />
             </div>
 
             <Card>
@@ -74,7 +74,7 @@ export const JobDetailPage: React.FC = () => {
                             <p className="text-white font-medium">Processing...</p>
                             <p className="text-zinc-500 text-sm">{elapsed}s elapsed</p>
                         </div>
-                    ) : status === 'succeeded' && job.output?.[0]?.signedUrl ? (
+                    ) : status === 'succeeded' && job?.output?.[0]?.signedUrl ? (
                         <img
                             src={job.output[0].signedUrl}
                             className="w-full h-full object-contain"

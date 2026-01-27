@@ -112,7 +112,7 @@ export async function getJob(jobId: string): Promise<JobDetails> {
     return response.data.data;
 }
 
-export async function getJobDownloadUrl(jobId: string): Promise<string> {
+export function getJobDownloadUrl(jobId: string): string {
     return `${API_BASE_URL}/jobs/${jobId}/download`;
 }
 
@@ -148,5 +148,49 @@ export async function getJobs(params?: {
     offset?: number;
 }): Promise<JobListResponse> {
     const response = await api.get('/jobs', { params });
+    return response.data.data;
+}
+
+// Booth Active Session
+export interface ActiveSessionData {
+    boothId: string;
+    sessionId: string;
+    eventId: string;
+    code: string;
+    name: string;
+    whatsapp: string;
+    operatorId: string;
+    startedAt: string;
+    mode?: string;
+    styleId?: string;
+    ttlSeconds?: number;
+    ttlSecondsRemaining?: number;
+}
+
+export interface SetActiveSessionParams {
+    sessionId: string;
+    eventId: string;
+    code?: string;
+    mode: string;
+    styleId: string;
+}
+
+export async function setActiveSession(boothId: string, params: SetActiveSessionParams): Promise<ActiveSessionData> {
+    const response = await api.post(`/booth/${boothId}/active-session`, params);
+    return response.data.data;
+}
+
+export async function clearActiveSession(boothId: string): Promise<{ boothId: string; cleared: boolean }> {
+    const response = await api.delete(`/booth/${boothId}/active-session`);
+    return response.data.data;
+}
+
+export async function getActiveSession(boothId: string): Promise<ActiveSessionData> {
+    const response = await api.get(`/booth/${boothId}/active-session`);
+    return response.data.data;
+}
+
+export async function refreshActiveSession(boothId: string): Promise<{ boothId: string; refreshed: boolean; ttlSeconds: number; session: ActiveSessionData }> {
+    const response = await api.post(`/booth/${boothId}/active-session/refresh`);
     return response.data.data;
 }

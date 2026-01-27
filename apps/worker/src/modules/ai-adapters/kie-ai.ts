@@ -73,7 +73,7 @@ export class KieAiProvider implements AiProvider {
             model,
             inputImageUrl,
             prompt: finalPrompt,
-            aspectRatio: aspectRatio || '1:1',
+            aspectRatio: aspectRatio || '9:16',
             resolution: resolution || '1K',
             outputFormat: outputFormat || 'png',
             jobId,
@@ -127,16 +127,8 @@ export class KieAiProvider implements AiProvider {
 
     private buildPromptFromStyle(styleId: string): string {
         const stylePrompts: Record<string, string> = {
-            'cartoon': 'Transform this photo into a vibrant cartoon style illustration',
-            'anime': 'Convert this photo into anime art style with detailed features',
-            'oil-painting': 'Transform this photo into a classical oil painting style',
-            'watercolor': 'Convert this photo into a soft watercolor painting',
-            'sketch': 'Transform this photo into a detailed pencil sketch',
-            'pop-art': 'Convert this photo into bold pop art style like Andy Warhol',
-            'cyberpunk': 'Transform this photo into futuristic cyberpunk style with neon lights',
-            'vintage': 'Apply vintage retro filter with warm tones to this photo',
-            'fantasy': 'Transform this photo into magical fantasy art style',
-            'portrait': 'Enhance this portrait photo with professional studio lighting',
+            'cyberpunk': 'A futuristic cyberpunk humanoid character, standing confidently in the center of a neon-lit cyberpunk city at night, cinematic atmosphere. Wearing a sleek black glossy futuristic bodysuit / exosuit, high-tech materials, subtle reflections, sci-fi armor textures, form-fitting but neutral silhouette. No visible gender traits, no cultural or religious clothing. Hero shot, centered composition, symmetrical framing, medium close-up to full body. Background filled with towering cyberpunk buildings, glowing holographic signs, neon typography, teal and magenta lights, moody urban sci-fi environment. Foreground includes stylized futuristic cityscape illustration, glowing neon waves, digital skyline elements, sci-fi UI inspired visuals. Ultra-detailed, cinematic lighting, volumetric fog, shallow depth of field. Cyberpunk color grading (teal, cyan, magenta, purple), high contrast, dramatic mood. Hyper-realistic rendering, concept art quality, sci-fi movie poster aesthetic, 8K detail.',
+            'royal-thai': 'Photorealistic royal Southeast Asian portrait, traditional Thai-inspired palace setting. Preserve the original face identity from the source image with high fidelity. Facial structure, eye shape, nose, lips, jawline, skin texture must remain identical to the source face. Subject standing confidently in a grand palace courtyard with ornate golden temple architecture, cinematic golden hour lighting, warm soft sunlight, shallow depth of field. Traditional royal Southeast Asian outfit: luxury silk fabric, elegant draped clothing, refined embroidery, ceremonial formal attire. Rich gold and royal blue color palette, premium texture, realistic fabric folds. Natural realistic skin tones, sharp facial details, no beautification, no face alteration. DSLR photo quality, 85mm lens look, f1.8, cinematic color grading, ultra-detailed, high realism.',
         };
 
         return stylePrompts[styleId] || `Apply ${styleId} style transformation to this photo`;
@@ -153,7 +145,7 @@ export class KieAiProvider implements AiProvider {
     }): Promise<string> {
         const { model, inputImageUrl, prompt, aspectRatio, resolution, outputFormat, jobId } = params;
 
-        const callbackUrl = this.callbackBaseUrl 
+        const callbackUrl = this.callbackBaseUrl
             ? `${this.callbackBaseUrl}/api/kie/callback`
             : undefined;
 
@@ -217,7 +209,7 @@ export class KieAiProvider implements AiProvider {
                 const axiosError = error as AxiosError<KieCreateTaskResponse>;
                 const statusCode = axiosError.response?.status || 500;
                 const errorType = classifyKieError(statusCode);
-                
+
                 throw new KieAiError(
                     axiosError.response?.data?.msg || axiosError.message,
                     statusCode,
@@ -256,14 +248,14 @@ export class KieAiProvider implements AiProvider {
 
                 try {
                     const data: KieCallbackData = JSON.parse(message);
-                    
+
                     // Only process callback for our taskId
                     if (data.taskId === taskId && data.jobId === jobId) {
                         resolved = true;
                         clearTimeout(timeout);
                         subscriber.unsubscribe(KIE_CALLBACK_CHANNEL);
                         subscriber.quit();
-                        
+
                         logger.info({ taskId, jobId }, 'Received callback for task');
                         resolve(data);
                     }

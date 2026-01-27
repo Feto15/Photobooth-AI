@@ -370,6 +370,7 @@ router.get('/:id', requireAuth, async (req, res) => {
         }
 
         const state = await job.getState();
+        const mappedState = mapBullMQState(state);
         const progress = job.progress;
         const result = job.returnvalue;
         const data = job.data;
@@ -387,7 +388,7 @@ router.get('/:id', requireAuth, async (req, res) => {
         res.json({
             data: {
                 jobId: id,
-                status: state,
+                status: mappedState,
                 progress,
                 data,
                 output,

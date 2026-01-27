@@ -5,9 +5,10 @@ Dokumen ini adalah rencana implementasi teknis (tanpa timeline) yang menurunkan 
 ## 0) Scope MVP vs non-MVP
 **MVP (event-ready)**
 - 2-phase flow: tenant isi data dulu → operator foto dan submit job dengan session.
-- Auth operator + UI minimal (Tenant form, Login, Lookup+Capture/Upload, Queue, Job Detail).
+- Auth operator + UI minimal (Tenant form + QR offline, Login, Lookup+Capture/Upload, Queue, Job Detail).
 - `POST /jobs`, `GET /jobs/:id`, `GET /jobs/:id/download`.
 - `POST /sessions` (public tenant) + `GET /sessions/:code` (operator lookup).
+- **Hotfolder (Pro Camera)**: watcher + active session booth (optional but supported).
 - Queue + worker terpisah untuk AI processing.
 - Storage S3-compatible untuk input/output + signed URL.
 - AI provider minimal 1 opsi (disarankan mulai dari `kie.ai` untuk cepat).
@@ -236,8 +237,8 @@ Buat interface `AiProvider`:
 
 ### 8.2 Screens (MVP)
 - Tenant (Public):
-  - form `name + whatsapp`
-  - hasil: tampil `code` + QR
+  - form `eventId + name + whatsapp`
+  - hasil: tampil `code` + **QR offline** (tanpa dependency internet)
 - Login:
   - save token (memory + localStorage optional)
 - Capture/Upload:
@@ -247,6 +248,10 @@ Buat interface `AiProvider`:
   - preview + retake
   - submit job (multipart to backend)
   - disable submit during upload
+  - **Pro Camera Mode**:
+    - tombol Start/Stop (set active session booth)
+    - status “waiting for file”
+    - recent jobs list (polling)
 - Dashboard/Queue:
   - list jobs (`GET /jobs`)
   - status chips + quick open detail
@@ -292,6 +297,7 @@ Buat interface `AiProvider`:
 - `OPERATOR_PASSWORD` (MVP single operator)
 - `REDIS_URL`
 - `SESSION_TTL_SECONDS` (mis. 21600 untuk 6 jam)
+- `ACTIVE_SESSION_TTL_SECONDS` (mis. 1800)
 - `S3_ENDPOINT` (optional untuk MinIO/R2)
 - `S3_REGION`
 - `S3_ACCESS_KEY_ID`
@@ -308,9 +314,17 @@ Buat interface `AiProvider`:
 - `COMFY_API_BASE_URL` (phase 2)
 - `WORKER_CONCURRENCY_KIE`
 - `WORKER_CONCURRENCY_COMFY`
+- `HOTFOLDER_PATH` (mis. `./hotfolder`)
+- `ORPHAN_PATH` (mis. `./hotfolder/orphan`)
+- `INVALID_PATH` (mis. `./hotfolder/invalid`)
+- `PROCESSED_PATH` (mis. `./hotfolder/processed`)
+- `BOOTH_ID` (mis. `booth-1`)
+- `FILE_STABILITY_DELAY_MS` (mis. `2000`)
 
 **WEB**
 - `VITE_API_BASE_URL`
+- `VITE_EVENT_ID`
+- `VITE_BOOTH_ID`
 
 ## 12) Testing & verification (minimal tapi bernilai)
 - API:
@@ -323,6 +337,8 @@ Buat interface `AiProvider`:
   - create job sukses → output tersimpan → download works
   - restart api/worker → job status tidak hilang
   - retry job setelah failure
+  - tenant: create session → QR muncul tanpa internet
+  - hotfolder: set active session → drop file → job auto‑enqueue → output tersedia
 
 ## 13) Perintah kerja (pnpm)
 Minimal command yang dipakai tim:
@@ -330,3 +346,21 @@ Minimal command yang dipakai tim:
 - Dev (semua): `pnpm dev`
 - Dev per package: `pnpm --filter <name> dev`
 - Build (semua): `pnpm build`
+### 3.5 Active booth session (Redis)
+Untuk pro camera (hotfolder), simpan sesi aktif booth:
+- `activeSession:{boothId}` → `{ sessionId, eventId, name, whatsapp, mode, styleId, operatorId, startedAt }`
+  - TTL: 30–60 menit (refresh saat file masuk)
+### 4.5 Endpoint booth (pro camera)
+#### `POST /booth/:boothId/active-session` (operator-only)
+- Input: `{ sessionId, eventId, mode, styleId }`
+- Simpan ke Redis `activeSession:{boothId}` + TTL
+- Return data sesi aktif + TTL
+
+#### `GET /booth/:boothId/active-session`
+- Return sesi aktif dan `ttlSecondsRemaining`
+
+#### `DELETE /booth/:boothId/active-session`
+- Clear active session
+
+#### `POST /booth/:boothId/active-session/refresh`
+- Refresh TTL (dipanggil watcher saat file masuk)

@@ -1,166 +1,99 @@
-# kie.ai integration notes (Google “Nano Banana” family)
+# kie.ai integration notes (Unified Documentation)
 
-Dokumen ini merangkum cara pakai endpoint `POST https://api.kie.ai/api/v1/jobs/createTask` untuk 3 model Google yang relevan, plus catatan integrasi untuk sistem Photobot (worker/queue + storage).
+Dokumen ini merangkum cara pakai berbagai model Kie.ai (Image, Video, Avatar, Music) untuk sistem Photobot.
 
 ## Auth
-- Semua request wajib header: `Authorization: Bearer <KIE_API_KEY>`
+- Base URL: `https://api.kie.ai`
+- Header wajib: `Authorization: Bearer <KIE_API_KEY>`
 - Content-Type: `application/json`
-- Simpan API key hanya di backend/worker (jangan di frontend).
 
-## Konsep dasar flow
-1. Worker/backend submit task ke `POST /api/v1/jobs/createTask`.
-2. Response mengembalikan `data.taskId`.
-3. Ambil hasil via endpoint “Get Task Details” (unified query) **atau** gunakan `callBackUrl` agar kie.ai melakukan POST ke endpoint kamu saat selesai.
+## Model & Endpoint List
 
-Catatan:
-- Untuk production, `callBackUrl` lebih disarankan daripada polling.
-- Format “Get Task Details” tidak dicantumkan di snippet ini; ikuti dokumentasi: https://docs.kie.ai (cari “Get Task Details / get-task-detail”).
+### 1. Image Generation (Nano Banana Family)
+**Endpoint:** `POST /api/v1/jobs/createTask`
+- `nano-banana-pro`: Professional image-to-image (Proses utama Photobot).
+- `google/nano-banana`: Dasar text-to-image.
+- `google/nano-banana-edit`: Image editing / inpaint.
 
-## Requirement image input (penting)
-Semua parameter image di API ini berupa **URL** (bukan file upload langsung):
-- `nano-banana-pro`: `input.image_input` = array URL gambar (max 8, max 30MB per image).
-- `google/nano-banana-edit`: `input.image_urls` = array URL gambar (max 10, max 10MB per image).
+### 2. Video & Animation (Sora-2 & Grok)
+**Endpoint:** `POST /api/v1/jobs/createTask`
+- `sora-2-pro-text-to-video` / `image-to-video`.
+- `grok-imagine/text-to-video` / `image-to-video`.
+- `kling-2.6/motion-control`: Dance/motion transfer.
+- `wan/2-2-animate-move`: Animate static image.
 
-Implikasi untuk Photobot:
-- Input image harus tersedia via URL yang bisa diakses dari server kie.ai.
-- Opsi paling simpel: simpan input di S3/R2/MinIO dan buat **signed URL** (TTL cukup panjang untuk proses, mis. 30–60 menit).
+### 3. Music Generation (Suno)
+**Endpoint:** `POST /api/v1/generate` (Berbeda!)
+- Model: `V5`, `V4_5PLUS`, `V4`.
+- Perlu `customMode: true/false`.
 
-## Endpoint: createTask
-`POST https://api.kie.ai/api/v1/jobs/createTask`
+---
 
-### 1) nano-banana-pro (image-to-image)
-**Model**
-- `model: "nano-banana-pro"`
+## Konsep Callback & Status
 
-**Request body**
+Kie.ai menggunakan sistem asinkron. Kamu mengirim tugas, lalu menunggu hasilnya.
+
+### Callback Payload (Menerima Hasil Otomatis)
+Berdasarkan investigasi, Kie.ai mengirimkan struktur data yang bervariasi tergantung modelnya:
+
+**Format A (Umum / Image):**
 ```json
 {
-  "model": "nano-banana-pro",
-  "callBackUrl": "https://your-domain.com/api/kie/callback",
-  "input": {
-    "prompt": "string (max 10000)",
-    "image_input": ["https://..."],
-    "aspect_ratio": "1:1",
-    "resolution": "1K",
-    "output_format": "png"
+  "taskId": "...",
+  "status": "completed",
+  "output": {
+    "image_urls": ["https://..."]
   }
 }
 ```
 
-**Enums**
-- `aspect_ratio`: `1:1 | 2:3 | 3:2 | 3:4 | 4:3 | 4:5 | 5:4 | 9:16 | 16:9 | 21:9 | auto`
-- `resolution`: `1K | 2K | 4K`
-- `output_format`: `png | jpg`
-
-### 2) google/nano-banana (text-to-image)
-**Model**
-- `model: "google/nano-banana"`
-
-**Request body**
-```json
-{
-  "model": "google/nano-banana",
-  "callBackUrl": "https://your-domain.com/api/kie/callback",
-  "input": {
-    "prompt": "string (max 5000)",
-    "output_format": "png",
-    "image_size": "1:1"
-  }
-}
-```
-
-**Enums**
-- `image_size`: `1:1 | 9:16 | 16:9 | 3:4 | 4:3 | 3:2 | 2:3 | 5:4 | 4:5 | 21:9 | auto`
-- `output_format`: `png | jpeg`
-
-### 3) google/nano-banana-edit (image editing)
-**Model**
-- `model: "google/nano-banana-edit"`
-
-**Request body**
-```json
-{
-  "model": "google/nano-banana-edit",
-  "callBackUrl": "https://your-domain.com/api/kie/callback",
-  "input": {
-    "prompt": "string (max 5000)",
-    "image_urls": ["https://..."],
-    "output_format": "png",
-    "image_size": "1:1"
-  }
-}
-```
-
-**Enums**
-- `image_size`: sama seperti `google/nano-banana`
-- `output_format`: `png | jpeg`
-
-## Response sukses (createTask)
+**Format B (Music / Suno):**
 ```json
 {
   "code": 200,
-  "msg": "success",
-  "data": { "taskId": "task_..._123" }
+  "data": {
+    "callbackType": "complete",
+    "task_id": "...",
+    "data": [
+      { "audio_url": "https://...", "image_url": "https://..." }
+    ]
+  }
 }
 ```
 
-## Error codes (API-level)
-Kode yang disebut di OpenAPI response wrapper:
-- `401` unauthorized (API key salah/invalid)
-- `402` insufficient credits
-- `422` validation error
-- `429` rate limited
-- `455` service unavailable/maintenance
-- `500` server error
-- `501` generation failed
-- `505` feature disabled
-
-Rekomendasi mapping untuk worker Photobot:
-- `401/402/422/505`: **fatal** (jangan retry otomatis)
-- `429/455/500`: **transient** (retry + backoff)
-- `501`: biasanya **fatal** (boleh 1 retry jika dicurigai fluke, tapi default fatal)
-
-## callBackUrl (recommended)
-Kalau pakai callback:
-- Siapkan endpoint backend mis. `POST /api/kie/callback` untuk menerima status + result URL.
-- Pastikan endpoint callback:
-  - tidak butuh auth operator,
-  - **validasi** payload minimal (taskId ada),
-  - punya mekanisme anti-abuse (mis. token acak di querystring callback URL, rate limit, allowlist IP jika memungkinkan).
-
-Catatan: spesifikasi payload callback tidak ada di snippet; implementasi harus mengikuti docs kie.ai untuk “callback payload”.
-
-## Contoh fetch (Node)
-```js
-await fetch("https://api.kie.ai/api/v1/jobs/createTask", {
-  method: "POST",
-  headers: {
-    Authorization: `Bearer ${process.env.KIE_API_KEY}`,
-    "Content-Type": "application/json"
-  },
-  body: JSON.stringify({
-    model: "nano-banana-pro",
-    callBackUrl: "https://your-domain.com/api/kie/callback",
-    input: {
-      prompt: "Photobooth style: ...",
-      image_input: ["https://signed-url-to-input"],
-      aspect_ratio: "1:1",
-      resolution: "1K",
-      output_format: "png"
-    }
-  })
-});
+**Format C (Video / Sora / Grok via recordInfo style):**
+```json
+{
+  "code": 200,
+  "data": {
+    "taskId": "...",
+    "state": "success",
+    "resultJson": "{\"resultUrls\":[\"https://...\"]}"
+  }
+}
 ```
 
-## Catatan integrasi untuk adapter Photobot (disarankan)
-- Simpan relasi `jobId -> taskId` (di Redis) agar:
-  - polling bisa update status,
-  - callback bisa menemukan job yang tepat.
-- Simpan parameter penting untuk reproducibility/debug:
-  - `model`, `prompt`, `aspect_ratio/image_size`, `resolution`, `output_format`, input image URL/key.
-- Timeout:
-  - network timeout request createTask: 15–30s
-  - total job timeout: sesuaikan workflow (mis. 3–5 menit untuk event)
-- Download result:
-  - hasil dari kie.ai biasanya URL → worker download → simpan ke storage booth → expose via signed URL.
+### Polling Status (Manual)
+Jika callback gagal, gunakan:
+`GET /api/v1/jobs/recordInfo?taskId={taskId}`
 
+---
+
+## Logika Handler untuk Photobot (Rekomendasi)
+
+Agar sistem Photobot stabil menerima semua jenis model, handler callback di `/api/kie/callback` harus:
+
+1.  **Ekstrak Task ID:** Cek `body.taskId`, `body.task_id`, `body.id`, `body.data.taskId`, atau `body.data.task_id`.
+2.  **Ekstrak Status:** Cek `body.status`, `body.data.state`, `body.data.callbackType`. 
+    - Sukses jika: `completed`, `success`, `complete`.
+3.  **Ekstrak URL Hasil:**
+    - Cek `body.output.image_urls`
+    - Cek `body.data.image_urls`
+    - Parse `body.data.resultJson` -> `resultUrls`
+    - Cek `body.data.data[0].audio_url` atau `image_url`
+4.  **Publikasi ke Worker:** Kirim hasil ke Redis channel `kie:callback`.
+
+## Penting: Input Requirement
+- Input gambar harus berupa **URL Public**.
+- Gunakan **Signed URL** S3/R2 dengan TTL 3600 (1 jam).
+- **Ngrok Warning:** Jika menggunakan ngrok gratis, Kie.ai mungkin terhalang "Browser Warning". Gunakan `localtunnel` atau `cloudflared` untuk dev.

@@ -9,6 +9,7 @@ import authRouter from './modules/auth/auth.controller';
 import jobsRouter from './modules/jobs/jobs.controller';
 import sessionsRouter from './modules/sessions/sessions.controller';
 import kieRouter from './modules/kie/kie.controller';
+import boothRouter from './modules/booth/booth.controller';
 
 export const logger = pino({
     transport: {
@@ -72,6 +73,7 @@ app.use('/auth', authRouter);
 app.use('/sessions', sessionsRouter);
 app.use('/jobs', jobsRouter);
 app.use('/api/kie', kieRouter);
+app.use('/booth', boothRouter);
 
 // Error handler
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {

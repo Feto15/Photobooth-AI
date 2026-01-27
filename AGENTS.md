@@ -3,6 +3,7 @@
 ## Project overview
 - Sistem “Photobot Event/Booth” adalah web app untuk operator booth (bukan end-user) untuk capture/upload foto, submit proses AI, memantau antrean, dan download/print output.
 - Flow utama: **2-phase** — peserta isi data dulu di tenant (nama + nomor WA) → booth lookup `code/QR` → operator foto → submit job dengan `sessionId` (sinkron data).
+- Opsional: **Pro Camera / Hotfolder** — kamera profesional simpan foto ke folder → watcher auto‑submit job ke queue.
 - Tech: Frontend `Vite + React`, Backend `Node.js + Express`, worker/queue untuk image processing.
 - MVP saat ini diarahkan **tanpa DB**: metadata job & state disimpan via `Redis + BullMQ` (dengan Redis persistence disarankan untuk event).
 - Dokumen:
@@ -18,6 +19,7 @@ Project memakai **pnpm** (recommended untuk monorepo/workspaces).
 ### Dev
 - `pnpm dev`
 - Per package (jika monorepo): `pnpm --filter <name> dev`
+  - Hotfolder watcher: `pnpm --filter @photobot/worker hotfolder`
 
 ### Build
 - `pnpm build`
@@ -55,6 +57,8 @@ Project memakai **pnpm** (recommended untuk monorepo/workspaces).
   - Buat job → status `queued/running/succeeded` → download output.
   - Restart api/worker/redis → antrean & status tidak hilang (Redis persistence).
   - Simulasikan provider down → retry + error message jelas.
+  - Tenant create session → QR muncul **tanpa internet**.
+  - Hotfolder: set active session → drop file → job auto‑enqueue → output tersedia.
 
 ## Security considerations
 - Jangan expose API key di frontend; simpan di env backend/worker.

@@ -4,12 +4,14 @@
     "main": "dist/index.js",
     "scripts": {
         "dev": "tsx watch src/index.ts",
+        "hotfolder": "tsx watch src/hotfolder-watcher.ts",
         "build": "tsc",
         "start": "node dist/index.js"
     },
     "dependencies": {
         "@photobot/shared": "workspace:*",
         "bullmq": "^5.1.1",
+        "chokidar": "^3.6.0",
         "ioredis": "^5.3.2",
         "pino": "^8.19.0",
         "pino-pretty": "^10.3.1",

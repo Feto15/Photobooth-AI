@@ -9,6 +9,7 @@
 - Frontend: Vite + React
 - Backend: Node.js + Express
 - Package manager: **pnpm** (recommended untuk monorepo/workspaces)
+- QR: **offline** via client-side QR generator (tidak bergantung internet)
 
 ## 2) User flow operator (step-by-step)
 Flow ini diasumsikan memakai **2-phase**: peserta isi data dulu (tenant), baru booth melakukan foto (operator).
@@ -17,8 +18,10 @@ Flow ini diasumsikan memakai **2-phase**: peserta isi data dulu (tenant), baru b
 2. Operator memilih `event` (atau otomatis berdasarkan booth) dan memilih `mode/style`.
 3. Operator meminta peserta menunjukkan **kode/QR** hasil registrasi (tenant).
 4. Operator input/scan `code` → sistem melakukan lookup session (`GET /sessions/:code`) dan menampilkan `nama` + `nomor WA` agar sinkron.
-5. Operator mengambil foto (capture dari webcam) atau mengunggah file.
-6. UI membuat *job* (`POST /jobs`) dengan `sessionId` + foto + parameter style/mode.
+5. Operator memilih mode capture:
+   - **Mode Manual**: ambil foto via webcam/upload.
+   - **Mode Pro Camera (Hot Folder)**: aktifkan “Start Capture” untuk menerima file otomatis dari folder kamera profesional.
+6. UI membuat *job* (`POST /jobs`) dengan `sessionId` + foto + parameter style/mode (manual), **atau** watcher otomatis meng‑enqueue job (pro camera).
 7. UI menampilkan job masuk antrean: `queued` → `running`.
 8. Saat selesai (`succeeded`), operator membuka detail job untuk preview dan download/print.
 9. Jika gagal (`failed`), operator dapat retry (dengan parameter sama) atau submit ulang.
@@ -27,7 +30,7 @@ Flow ini diasumsikan memakai **2-phase**: peserta isi data dulu (tenant), baru b
 1. Peserta membuka halaman tenant (public) dan memilih/terdeteksi `event`.
 2. Peserta mengisi data: `nama` dan `nomor WhatsApp` (opsional: `kode peserta`).
 3. Sistem membuat **session** (`POST /sessions`) lalu menampilkan:
-   - `code` (short code) + QR untuk discan di booth,
+   - `code` (short code) + **QR offline** untuk discan di booth,
    - (opsional) konfirmasi data yang tersimpan.
 4. Peserta menuju booth dan menunjukkan `code/QR` ke operator.
 
@@ -37,7 +40,9 @@ Flow ini diasumsikan memakai **2-phase**: peserta isi data dulu (tenant), baru b
   - `/_tenant`: public form registrasi (buat session, tampilkan QR).
   - `/_operator`: UI operator (login, lookup session, capture/upload, queue, download/print).
 - **Backend (Node.js + Express)**: REST API, autentikasi operator, validasi input, pre-signed upload URL (opsional), pembuatan job, status job, integrasi storage, enqueue job, *job results*, audit log minimal.
-- **Queue/Worker**: worker terpisah dari web server untuk pemrosesan image/AI; mengambil job dari queue; update progress/status; melakukan retry/backoff; menyimpan output ke storage.
+- **Queue/Worker**:
+  - Worker AI: pemrosesan image/AI; update progress/status; simpan output ke storage.
+  - **Hotfolder Watcher**: memantau folder kamera pro, auto‑upload + enqueue job jika ada active session.
 - **Storage (S3-compatible atau lokal)**: menyimpan input image dan output image; akses via signed URL.
 - **AI provider**:
   - Opsi A: external AI API provider `kie.ai`
@@ -494,8 +499,8 @@ Implementasi bisa sesederhana:
 
 ## 11) UI operator (Vite React) – layar/komponen minimal
 - **Tenant (Public Registration)**
-  - form: nama + nomor WA
-  - output: tampilkan `code` + QR (untuk booth scan/input)
+  - form: eventId + nama + nomor WA
+  - output: tampilkan `code` + QR **offline** (untuk booth scan/input)
 - **Login**
   - form user/pass, error handling, loading state
 - **Dashboard/Queue**
@@ -504,7 +509,9 @@ Implementasi bisa sesederhana:
   - tombol “Retry” (untuk failed) dan “Cancel” (jika masih queued)
 - **Capture/Upload**
   - field lookup: input/scan `code` (ambil `name/wa` dari session)
+  - state error jika session expired/invalid (minta lookup ulang)
   - webcam capture (preview + retake) dan upload file
+  - **Pro Camera Mode**: tombol Start/Stop, status “menunggu file”, daftar job terbaru
   - pilih mode/style + input nama/kode
   - tombol “Submit” dengan disable saat uploading
   - state network/offline banner + “Resume”
@@ -545,3 +552,40 @@ Implementasi bisa sesederhana:
 - Tambahkan retention cleanup (lifecycle rule atau scheduled cleanup job).
 - Tambahkan circuit breaker sederhana untuk provider.
 - Hardening event mode: offline banner + resume upload + guard double submit.
+### Endpoint: Booth (hotfolder)
+#### `POST /booth/:boothId/active-session` (operator-only)
+Set sesi aktif untuk booth (dipakai hotfolder watcher).
+
+Request:
+```json
+{
+  "sessionId": "sess_01HZZ...",
+  "eventId": "event-2026-01",
+  "mode": "portrait",
+  "styleId": "cyber"
+}
+```
+Response:
+```json
+{
+  "data": {
+    "boothId": "booth-1",
+    "sessionId": "sess_01HZZ...",
+    "eventId": "event-2026-01",
+    "name": "Andi",
+    "whatsapp": "62812xxxxxxx",
+    "mode": "portrait",
+    "styleId": "cyber",
+    "ttlSeconds": 1800
+  }
+}
+```
+
+#### `GET /booth/:boothId/active-session`
+Mengambil sesi aktif saat ini untuk booth.
+
+#### `DELETE /booth/:boothId/active-session`
+Menonaktifkan sesi aktif (stop capture).
+
+#### `POST /booth/:boothId/active-session/refresh`
+Refresh TTL (dipakai watcher saat file masuk).
