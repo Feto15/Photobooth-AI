@@ -1,17 +1,14 @@
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { redis } from '../../config/redis';
-import { config } from '../../config';
 import { requireAuth, AuthRequest } from '../../middlewares/auth';
 import { logger } from '../../index';
+import { prisma } from '@photobot/db';
 
 const router = Router();
 
 // Redis key patterns
 const ACTIVE_SESSION_KEY_PREFIX = 'activeSession:';
-const SESSION_KEY_PREFIX = 'session:';
-const SESSION_BY_ID_PREFIX = 'sessionById:';
-
 // TTL for active session (30 minutes default, can be configured)
 const ACTIVE_SESSION_TTL_SECONDS = parseInt(process.env.ACTIVE_SESSION_TTL_SECONDS || '1800', 10);
 
@@ -63,34 +60,35 @@ router.post('/:boothId/active-session', requireAuth, async (req: AuthRequest, re
         const { sessionId, eventId, code, mode, styleId } = parseResult.data;
 
         // Validate session exists and matches eventId
-        let sessionData: any = null;
+        let session = await prisma.session.findFirst({
+            where: {
+                id: sessionId,
+                eventId,
+                expiresAt: {
+                    gt: new Date(),
+                },
+            },
+            include: {
+                customer: true,
+            },
+        });
 
-        let resolvedCode = code;
-
-        if (!resolvedCode) {
-            const reverseKey = `${SESSION_BY_ID_PREFIX}${sessionId}`;
-            const reverseStr = await redis.get(reverseKey);
-            if (reverseStr) {
-                const reverse = JSON.parse(reverseStr);
-                resolvedCode = reverse.code;
-            }
-        }
-
-        if (resolvedCode) {
-            const sessionKey = `${SESSION_KEY_PREFIX}${resolvedCode}`;
-            const sessionDataStr = await redis.get(sessionKey);
-            if (!sessionDataStr) {
-                return res.status(404).json({
-                    error: {
-                        code: 'SESSION_NOT_FOUND',
-                        message: 'Session not found or expired',
+        if (!session && code) {
+            session = await prisma.session.findFirst({
+                where: {
+                    code,
+                    eventId,
+                    expiresAt: {
+                        gt: new Date(),
                     },
-                });
-            }
-            sessionData = JSON.parse(sessionDataStr);
+                },
+                include: {
+                    customer: true,
+                },
+            });
         }
 
-        if (!sessionData) {
+        if (!session || !session.customer) {
             return res.status(404).json({
                 error: {
                     code: 'SESSION_NOT_FOUND',
@@ -100,7 +98,7 @@ router.post('/:boothId/active-session', requireAuth, async (req: AuthRequest, re
         }
 
         // Validate sessionId matches (if provided)
-        if (sessionData.sessionId !== sessionId) {
+        if (session.id !== sessionId) {
             return res.status(400).json({
                 error: {
                     code: 'SESSION_ID_MISMATCH',
@@ -109,23 +107,13 @@ router.post('/:boothId/active-session', requireAuth, async (req: AuthRequest, re
             });
         }
 
-        // Validate eventId matches
-        if (sessionData.eventId !== eventId) {
-            return res.status(400).json({
-                error: {
-                    code: 'EVENT_MISMATCH',
-                    message: 'Session eventId does not match provided eventId',
-                },
-            });
-        }
-
         // Build active session data
         const activeSessionData: ActiveSessionData = {
-            sessionId: sessionData.sessionId,
-            eventId: sessionData.eventId,
-            code: sessionData.code,
-            name: sessionData.name,
-            whatsapp: sessionData.whatsapp,
+            sessionId: session.id,
+            eventId: session.eventId,
+            code: session.code,
+            name: session.customer.name,
+            whatsapp: session.customer.whatsapp,
             operatorId,
             startedAt: new Date().toISOString(),
             mode,

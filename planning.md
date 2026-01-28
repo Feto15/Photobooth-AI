@@ -1,6 +1,6 @@
 # Planning DESIGN — Photobot Event/Booth (tanpa timeline)
 
-> Catatan: file ini berisi design. Rencana implementasi MVP ada di `implementation-plan.md` (MVP tanpa DB, pakai Redis/BullMQ).
+> Catatan: file ini berisi design. Rencana implementasi MVP ada di `implementation-plan.md` (Postgres + Prisma untuk data permanen, Redis/BullMQ untuk queue).
 
 ## 1) Ringkasan sistem
 “Photobot Event/Booth” adalah sistem web untuk operator booth yang membuat *job* dari foto peserta (capture/upload) + parameter style/mode, lalu memprosesnya via layer AI (external AI API provider `kie.ai` atau ComfyUI self-hosted di VPS). Backend mengelola autentikasi operator, pembuatan job, antrean pemrosesan, penyimpanan input/output image, serta status/retry yang stabil untuk pemakaian berulang saat event dengan internet fluktuatif.
@@ -9,6 +9,7 @@
 - Frontend: Vite + React
 - Backend: Node.js + Express
 - Package manager: **pnpm** (recommended untuk monorepo/workspaces)
+- Database: **Postgres (Neon)** via Prisma
 - QR: **offline** via client-side QR generator (tidak bergantung internet)
 
 ## 2) User flow operator (step-by-step)
@@ -40,6 +41,7 @@ Flow ini diasumsikan memakai **2-phase**: peserta isi data dulu (tenant), baru b
   - `/_tenant`: public form registrasi (buat session, tampilkan QR).
   - `/_operator`: UI operator (login, lookup session, capture/upload, queue, download/print).
 - **Backend (Node.js + Express)**: REST API, autentikasi operator, validasi input, pre-signed upload URL (opsional), pembuatan job, status job, integrasi storage, enqueue job, *job results*, audit log minimal.
+- **Database (Postgres/Neon)**: data permanen `events/customers/sessions/jobs`.
 - **Queue/Worker**:
   - Worker AI: pemrosesan image/AI; update progress/status; simpan output ke storage.
   - **Hotfolder Watcher**: memantau folder kamera pro, auto‑upload + enqueue job jika ada active session.

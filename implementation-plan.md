@@ -34,6 +34,7 @@ Gunakan monorepo supaya FE/BE/worker bisa share types, dan **pakai pnpm workspac
     worker/         # BullMQ worker process
   packages/
     shared/         # types, zod schemas, util
+    db/             # prisma schema + db client
   infra/
     docker/         # docker-compose redis/minio (optional)
   docs/
@@ -60,12 +61,8 @@ Contoh cara jalanin per app (pnpm filter):
 - `pnpm --filter @photobot/web dev`
 
 ## 2) Keputusan komponen inti (yang perlu “dikunci” dulu)
-### 2.1 MVP tanpa DB (job metadata & auth)
-Untuk MVP, **jangan pakai DB dulu**: simpan state job + metadata minimal di **Redis** (via BullMQ + key tambahan seperlunya). Ini cukup untuk event karena Redis bisa persistence (AOF/RDB) dan BullMQ sudah menyimpan `data`, `progress`, dan `returnvalue`.
-
-Catatan:
-- Kalau benar-benar tanpa Redis juga, BullMQ tidak bisa dipakai → scope queue perlu berubah (bukan target MVP ini).
-- Setelah MVP stabil, baru pertimbangkan migrasi ke SQLite/Postgres untuk query/riwayat yang lebih rapi.
+### 2.1 DB utama: Postgres (Neon) + Redis untuk queue
+Gunakan **Postgres (Neon)** untuk data permanen (customers/sessions/jobs), dan **Redis + BullMQ** khusus untuk queue + state transient.
 
 ### 2.2 Queue
 - Default: **BullMQ + Redis**.
@@ -75,42 +72,30 @@ Catatan:
 Target interface S3-compatible:
 - AWS S3 / Cloudflare R2 / MinIO (pilih saat deploy).
 
-## 3) Data model (MVP tanpa DB)
+## 3) Data model (Postgres + Redis)
 ### 3.1 Operator auth (MVP paling simpel)
 - Single operator password di env (contoh: `OPERATOR_PASSWORD`) + JWT.
-- (Opsional) multi operator via env `OPERATORS_JSON` (array username+passwordHash) tanpa DB.
+- (Opsional) multi operator via env `OPERATORS_JSON` (array username+passwordHash).
 
-### 3.2 Tenant session (Redis)
-Untuk sinkronisasi nama + nomor WA sebelum foto, gunakan session object di Redis.
+### 3.2 Tabel Postgres (standar)
+- `events`
+- `customers` (participants)
+- `sessions`
+- `jobs`
+- `job_attempts` (optional)
+- `job_prints` (optional)
 
-**Redis keys**
-- `session:{code}` → JSON `{ sessionId, eventId, name, whatsapp, createdAt }`
-  - TTL: mis. 2–6 jam (sesuai durasi event)
-- `sessionById:{sessionId}` → `{ code }` (optional, memudahkan lookup balik)
-- `idemp:session:{fingerprint}` → `{ sessionId }` (optional, mencegah double submit tenant)
+### 3.3 Redis (queue + transient)
+- BullMQ job data (snapshot minimal untuk worker)
+- Idempotency keys: `idemp:{key}` → `jobId` (TTL 10–30 menit)
+- Active booth session: `activeSession:{boothId}` (TTL 30–60 menit)
 
-**Code format**
-- Short code mudah diketik/scan, contoh `A7K3D9` (6 chars alnum, uppercase).
+### 3.4 Active booth session (Redis)
+Untuk pro camera (hotfolder), simpan sesi aktif booth:
+- `activeSession:{boothId}` → `{ sessionId, eventId, name, whatsapp, mode, styleId, operatorId, startedAt }`
+  - TTL: 30–60 menit (refresh saat file masuk)
 
-### 3.3 Job metadata (BullMQ + Redis)
-**BullMQ job data** (tersimpan di Redis):
-- `jobId` (ULID/UUID) sebagai `jobId` BullMQ
-- `eventId`, `participantName`, `participantCode`
-- `mode`, `styleId`, `providerType`
-- `sessionId` (wajib untuk flow 2-phase)
-- snapshot `name` + `whatsapp` (disarankan disimpan di job data agar tidak tergantung TTL session)
-- `inputKey`, `inputContentType`, `inputSha256`, `inputSizeBytes`
-- `createdAt` (ISO string)
-
-**BullMQ progress**:
-- `progress`: `{ percent, stage }`
-
-**BullMQ return value** (hasil worker):
-- `outputKeys[]`, `bestOutputKey`
-- `providerRequestId`, `seed`, metadata ringkas
-- `errorCode/errorMessage` (jika gagal, ambil dari `failedReason` + custom mapping)
-
-### 3.4 Idempotency (Redis)
+### 3.5 Idempotency (Redis)
 - Key: `idemp:{Idempotency-Key}` → value `jobId` (gunakan `SET NX EX`).
   - TTL: mis. 10–30 menit untuk mencegah double-click.
 
@@ -155,7 +140,22 @@ Untuk sinkronisasi nama + nomor WA sebelum foto, gunakan session object di Redis
 - `POST /jobs/:id/cancel`: mark canceled + remove from queue jika belum running.
 - `GET /jobs?eventId=&status=&q=`: list untuk Dashboard/History.
 
-### 4.4 Endpoint sessions (tenant + operator lookup)
+### 4.4 Endpoint booth (pro camera)
+#### `POST /booth/:boothId/active-session` (operator-only)
+- Input: `{ sessionId, eventId, mode, styleId }`
+- Simpan ke Redis `activeSession:{boothId}` + TTL
+- Return data sesi aktif + TTL
+
+#### `GET /booth/:boothId/active-session`
+- Return sesi aktif dan `ttlSecondsRemaining`
+
+#### `DELETE /booth/:boothId/active-session`
+- Clear active session
+
+#### `POST /booth/:boothId/active-session/refresh`
+- Refresh TTL (dipanggil watcher saat file masuk)
+
+### 4.5 Endpoint sessions (tenant + operator lookup)
 #### `POST /sessions` (public)
 - Input: `{ eventId, name, whatsapp }`
 - Langkah:
@@ -188,7 +188,7 @@ Checklist implementasi:
 
 ## 6) Worker pipeline (BullMQ)
 ### 6.1 Job payload
-Queue payload minimal: job `data` BullMQ (source of truth ada di Redis/BullMQ).
+Queue payload minimal: job `data` BullMQ (source of truth ada di Postgres; Redis/BullMQ hanya state transient).
 
 ### 6.2 Pipeline langkah
 1. Ambil `job.data`; validasi minimal (defensive).
@@ -296,6 +296,7 @@ Buat interface `AiProvider`:
 - `JWT_SECRET`
 - `OPERATOR_PASSWORD` (MVP single operator)
 - `REDIS_URL`
+- `DATABASE_URL` (Neon Postgres)
 - `SESSION_TTL_SECONDS` (mis. 21600 untuk 6 jam)
 - `ACTIVE_SESSION_TTL_SECONDS` (mis. 1800)
 - `S3_ENDPOINT` (optional untuk MinIO/R2)
@@ -343,24 +344,7 @@ Buat interface `AiProvider`:
 ## 13) Perintah kerja (pnpm)
 Minimal command yang dipakai tim:
 - Install: `pnpm i`
+- Prisma: `pnpm -C packages/db prisma generate` dan `pnpm -C packages/db prisma migrate dev`
 - Dev (semua): `pnpm dev`
 - Dev per package: `pnpm --filter <name> dev`
 - Build (semua): `pnpm build`
-### 3.5 Active booth session (Redis)
-Untuk pro camera (hotfolder), simpan sesi aktif booth:
-- `activeSession:{boothId}` → `{ sessionId, eventId, name, whatsapp, mode, styleId, operatorId, startedAt }`
-  - TTL: 30–60 menit (refresh saat file masuk)
-### 4.5 Endpoint booth (pro camera)
-#### `POST /booth/:boothId/active-session` (operator-only)
-- Input: `{ sessionId, eventId, mode, styleId }`
-- Simpan ke Redis `activeSession:{boothId}` + TTL
-- Return data sesi aktif + TTL
-
-#### `GET /booth/:boothId/active-session`
-- Return sesi aktif dan `ttlSecondsRemaining`
-
-#### `DELETE /booth/:boothId/active-session`
-- Clear active session
-
-#### `POST /booth/:boothId/active-session/refresh`
-- Refresh TTL (dipanggil watcher saat file masuk)

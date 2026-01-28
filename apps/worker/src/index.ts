@@ -7,6 +7,7 @@ import {
     JobReturnValue
 } from '@photobot/shared';
 import { KieAiProvider, KieAiError } from './modules/ai-adapters/kie-ai';
+import { prisma } from '@photobot/db';
 
 dotenv.config();
 
@@ -59,6 +60,11 @@ const worker = new Worker<JobData, JobReturnValue>(
         logger.info({ jobId, eventId }, 'Processing job');
 
         try {
+            await prisma.job.update({
+                where: { id: jobId },
+                data: { status: 'running' },
+            });
+
             await job.updateProgress({ percent: 5, stage: 'preprocessing' });
 
             // Generate signed URL for input (kie.ai needs URL)
@@ -89,6 +95,15 @@ const worker = new Worker<JobData, JobReturnValue>(
             }
 
             await job.updateProgress({ percent: 100, stage: 'done' });
+
+            await prisma.job.update({
+                where: { id: jobId },
+                data: {
+                    status: 'succeeded',
+                    outputKey: outputKeys[0],
+                    outputKeys,
+                },
+            });
 
             return {
                 outputKeys,
@@ -123,6 +138,18 @@ worker.on('completed', (job) => {
 worker.on('failed', (job, err) => {
     const isFatal = err.message.startsWith('[FATAL]');
     logger.error({ jobId: job?.id, error: err.message, fatal: isFatal }, 'Job failed');
+
+    if (job?.id) {
+        prisma.job.update({
+            where: { id: job.id },
+            data: {
+                status: 'failed',
+                errorMessage: err.message,
+            },
+        }).catch((error) => {
+            logger.error({ jobId: job.id, error: error.message }, 'Failed to update job status');
+        });
+    }
 });
 
 worker.on('error', (err) => {
@@ -130,3 +157,9 @@ worker.on('error', (err) => {
 });
 
 logger.info({ concurrency: config.concurrency }, 'Worker started and waiting for jobs...');
+
+process.on('SIGINT', async () => {
+    logger.info('Shutting down worker...');
+    await prisma.$disconnect();
+    process.exit(0);
+});

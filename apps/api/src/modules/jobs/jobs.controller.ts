@@ -9,22 +9,14 @@ import { redis } from '../../config/redis';
 import { config } from '../../config';
 import { StorageClient, JobDataSchema, CreateJobRequestSchema } from '@photobot/shared';
 import { logger } from '../../index';
-
-// Helper to get session data from Redis
-async function getSession(sessionId: string) {
-    const reverseKey = `sessionById:${sessionId}`;
-    const codeDataStr = await redis.get(reverseKey);
-    if (!codeDataStr) return null;
-
-    const { code } = JSON.parse(codeDataStr);
-    const sessionKey = `session:${code}`;
-    const sessionDataStr = await redis.get(sessionKey);
-    if (!sessionDataStr) return null;
-
-    return JSON.parse(sessionDataStr);
-}
+import { prisma } from '@photobot/db';
 
 const router = Router();
+
+function normalizeKeys(value: unknown): string[] {
+    if (!Array.isArray(value)) return [];
+    return value.filter((key): key is string => typeof key === 'string' && key.length > 0);
+}
 
 const upload = multer({
     storage: multer.memoryStorage(),
@@ -71,62 +63,43 @@ router.get('/', requireAuth, async (req: AuthRequest, res: Response) => {
         const { eventId, status, limit = '50', offset = '0' } = req.query;
         const limitNum = Math.min(parseInt(limit as string, 10) || 50, 100);
         const offsetNum = parseInt(offset as string, 10) || 0;
+        const where: any = {};
+        if (eventId) {
+            where.eventId = eventId;
+        }
+        if (status) {
+            where.status = status;
+        }
 
-        // Get jobs from different states
-        const [waiting, active, completed, failed] = await Promise.all([
-            jobQueue.getJobs(['waiting', 'delayed'], 0, 200),
-            jobQueue.getJobs(['active'], 0, 200),
-            jobQueue.getJobs(['completed'], 0, 200),
-            jobQueue.getJobs(['failed'], 0, 200),
+        const [total, rows] = await Promise.all([
+            prisma.job.count({ where }),
+            prisma.job.findMany({
+                where,
+                orderBy: { createdAt: 'desc' },
+                skip: offsetNum,
+                take: limitNum,
+                include: {
+                    customer: true,
+                },
+            }),
         ]);
 
-        let allJobs = [...waiting, ...active, ...completed, ...failed];
-
-        // Filter by eventId if provided
-        if (eventId) {
-            allJobs = allJobs.filter(job => job.data?.eventId === eventId);
-        }
-
-        // Filter by status if provided
-        if (status) {
-            const statusFilter = status as string;
-            const filteredJobs = [];
-            for (const job of allJobs) {
-                const jobState = await job.getState();
-                const mappedState = mapBullMQState(jobState);
-                if (mappedState === statusFilter) {
-                    filteredJobs.push(job);
-                }
-            }
-            allJobs = filteredJobs;
-        }
-
-        // Sort by timestamp (newest first)
-        allJobs.sort((a, b) => {
-            const timeA = a.timestamp || 0;
-            const timeB = b.timestamp || 0;
-            return timeB - timeA;
-        });
-
-        // Paginate
-        const paginatedJobs = allJobs.slice(offsetNum, offsetNum + limitNum);
-
-        // Build response
-        const jobs = await Promise.all(paginatedJobs.map(async (job) => {
-            const state = await job.getState();
+        const jobs = await Promise.all(rows.map(async (row) => {
+            const queueJob = await jobQueue.getJob(row.id);
+            const outputKeys = Array.isArray(row.outputKeys) ? row.outputKeys : [];
             return {
-                jobId: job.id,
-                status: mapBullMQState(state),
-                progress: job.progress,
-                 data: {
-                     eventId: job.data?.eventId,
-                     participantName: job.data?.participantName,
-                     participantWhatsapp: job.data?.participantWhatsapp,
-                     mode: job.data?.mode,
-                     styleId: job.data?.styleId,
-                 },
-                createdAt: job.timestamp ? new Date(job.timestamp).toISOString() : null,
-                hasOutput: !!job.returnvalue?.bestOutputKey,
+                jobId: row.id,
+                status: row.status,
+                progress: queueJob?.progress ?? null,
+                data: {
+                    eventId: row.eventId,
+                    participantName: row.customer?.name || null,
+                    participantWhatsapp: row.customer?.whatsapp || null,
+                    mode: row.mode,
+                    styleId: row.styleId,
+                },
+                createdAt: row.createdAt.toISOString(),
+                hasOutput: !!row.outputKey || outputKeys.length > 0,
             };
         }));
 
@@ -134,7 +107,7 @@ router.get('/', requireAuth, async (req: AuthRequest, res: Response) => {
             data: {
                 jobs,
                 pagination: {
-                    total: allJobs.length,
+                    total,
                     limit: limitNum,
                     offset: offsetNum,
                 },
@@ -151,22 +124,6 @@ router.get('/', requireAuth, async (req: AuthRequest, res: Response) => {
         });
     }
 });
-
-function mapBullMQState(state: string): string {
-    switch (state) {
-        case 'waiting':
-        case 'delayed':
-            return 'queued';
-        case 'active':
-            return 'running';
-        case 'completed':
-            return 'succeeded';
-        case 'failed':
-            return 'failed';
-        default:
-            return state;
-    }
-}
 
 router.post('/', requireAuth, upload.single('image'), async (req: AuthRequest, res: Response) => {
     try {
@@ -201,8 +158,19 @@ router.post('/', requireAuth, upload.single('image'), async (req: AuthRequest, r
         const { sessionId, eventId, mode, styleId } = parseResult.data;
 
         // Fetch and validate session
-        const session = await getSession(sessionId);
-        if (!session) {
+        const session = await prisma.session.findFirst({
+            where: {
+                id: sessionId,
+                eventId,
+                expiresAt: {
+                    gt: new Date(),
+                },
+            },
+            include: {
+                customer: true,
+            },
+        });
+        if (!session || !session.customer) {
             return res.status(400).json({
                 error: {
                     code: 'SESSION_NOT_FOUND',
@@ -211,17 +179,8 @@ router.post('/', requireAuth, upload.single('image'), async (req: AuthRequest, r
             });
         }
 
-        if (session.eventId !== eventId) {
-            return res.status(400).json({
-                error: {
-                    code: 'SESSION_EVENT_MISMATCH',
-                    message: 'Session event does not match request event',
-                },
-            });
-        }
-
-        const participantName = session.name;
-        const participantWhatsapp = session.whatsapp;
+        const participantName = session.customer.name;
+        const participantWhatsapp = session.customer.whatsapp;
 
         // Validate image
         if (!req.file) {
@@ -263,8 +222,8 @@ router.post('/', requireAuth, upload.single('image'), async (req: AuthRequest, r
         const existingJobId = await checkIdempotency(idempotencyKey);
         if (existingJobId) {
             logger.info({ jobId: existingJobId, idempotencyKey }, 'Returning existing job (idempotency)');
-            const existingJob = await jobQueue.getJob(existingJobId);
-            const state = existingJob ? await existingJob.getState() : 'unknown';
+            const existingJob = await prisma.job.findUnique({ where: { id: existingJobId } });
+            const state = existingJob?.status || 'queued';
             return res.status(200).json({
                 data: {
                     jobId: existingJobId,
@@ -299,6 +258,20 @@ router.post('/', requireAuth, upload.single('image'), async (req: AuthRequest, r
         // Upload to S3
         await storageClient.putObject(inputKey, req.file.buffer, req.file.mimetype);
 
+        await prisma.job.create({
+            data: {
+                id: jobId,
+                eventId,
+                sessionId: session.id,
+                customerId: session.customer.id,
+                status: 'queued',
+                mode,
+                styleId,
+                provider: 'kie',
+                inputKey,
+            },
+        });
+
         const jobData = {
             jobId,
             sessionId,
@@ -319,16 +292,27 @@ router.post('/', requireAuth, upload.single('image'), async (req: AuthRequest, r
         const validated = JobDataSchema.parse(jobData);
 
         // Enqueue
-        await jobQueue.add('process-image', validated, {
-            jobId: jobId,
-            removeOnComplete: false,
-            removeOnFail: false,
-            attempts: 3,
-            backoff: {
-                type: 'exponential',
-                delay: 5000,
-            },
-        });
+        try {
+            await jobQueue.add('process-image', validated, {
+                jobId: jobId,
+                removeOnComplete: false,
+                removeOnFail: false,
+                attempts: 3,
+                backoff: {
+                    type: 'exponential',
+                    delay: 5000,
+                },
+            });
+        } catch (enqueueError: any) {
+            await prisma.job.update({
+                where: { id: jobId },
+                data: {
+                    status: 'failed',
+                    errorMessage: enqueueError?.message || 'Failed to enqueue job',
+                },
+            });
+            throw enqueueError;
+        }
 
         logger.info({ jobId, eventId, operatorId }, 'Job created');
 
@@ -363,37 +347,46 @@ router.post('/', requireAuth, upload.single('image'), async (req: AuthRequest, r
 router.get('/:id', requireAuth, async (req, res) => {
     try {
         const { id } = req.params;
-        const job = await jobQueue.getJob(id);
+        const job = await prisma.job.findUnique({
+            where: { id },
+            include: { customer: true },
+        });
 
         if (!job) {
             return res.status(404).json({ error: { message: 'Job not found' } });
         }
 
-        const state = await job.getState();
-        const mappedState = mapBullMQState(state);
-        const progress = job.progress;
-        const result = job.returnvalue;
-        const data = job.data;
+        const queueJob = await jobQueue.getJob(id);
+        const progress = queueJob?.progress ?? null;
+        const outputKeys = normalizeKeys(job.outputKeys);
+        const primaryKey = typeof job.outputKey === 'string' ? job.outputKey : null;
 
         // Generate signed URLs if succeeded
         let output = null;
-        if (result?.bestOutputKey) {
-            output = [{
+        if (primaryKey || outputKeys.length > 0) {
+            const keys = primaryKey ? [primaryKey, ...outputKeys.filter(k => k !== primaryKey)] : outputKeys;
+            output = await Promise.all(keys.map(async (key) => ({
                 type: 'image',
-                key: result.bestOutputKey,
-                signedUrl: await storageClient.createSignedGetUrl(result.bestOutputKey),
-            }];
+                key,
+                signedUrl: await storageClient.createSignedGetUrl(key),
+            })));
         }
 
         res.json({
             data: {
                 jobId: id,
-                status: mappedState,
+                status: job.status,
                 progress,
-                data,
+                data: {
+                    eventId: job.eventId,
+                    participantName: job.customer?.name || null,
+                    participantWhatsapp: job.customer?.whatsapp || null,
+                    mode: job.mode,
+                    styleId: job.styleId,
+                },
                 output,
-                failedReason: job.failedReason,
-                createdAt: job.timestamp ? new Date(job.timestamp).toISOString() : null,
+                failedReason: job.errorMessage,
+                createdAt: job.createdAt.toISOString(),
             },
         });
     } catch (error: any) {
@@ -405,13 +398,16 @@ router.get('/:id', requireAuth, async (req, res) => {
 router.get('/:id/download', requireAuth, async (req, res) => {
     try {
         const { id } = req.params;
-        const job = await jobQueue.getJob(id);
+        const job = await prisma.job.findUnique({ where: { id } });
+        const outputKeys = normalizeKeys(job?.outputKeys);
+        const primaryKey = typeof job?.outputKey === 'string' ? job?.outputKey : null;
+        const bestKey = primaryKey || outputKeys[0];
 
-        if (!job || !job.returnvalue?.bestOutputKey) {
+        if (!job || !bestKey) {
             return res.status(404).json({ error: { message: 'Result not ready' } });
         }
 
-        const signedUrl = await storageClient.createSignedGetUrl(job.returnvalue.bestOutputKey);
+        const signedUrl = await storageClient.createSignedGetUrl(bestKey);
         res.redirect(signedUrl);
     } catch (error: any) {
         res.status(500).json({ error: { message: error.message } });

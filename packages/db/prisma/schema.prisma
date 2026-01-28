@@ -1,0 +1,119 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum JobStatus {
+  queued
+  running
+  succeeded
+  failed
+  canceled
+}
+
+enum ProviderType {
+  kie
+  comfy
+}
+
+model Event {
+  id        String    @id @default(uuid())
+  name      String
+  startsAt  DateTime?
+  endsAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  customers Customer[]
+  sessions  Session[]
+  jobs      Job[]
+
+  @@index([startsAt])
+}
+
+model Customer {
+  id        String   @id @default(uuid())
+  eventId   String
+  name      String
+  whatsapp  String
+  code      String
+  createdAt DateTime @default(now())
+
+  event    Event   @relation(fields: [eventId], references: [id])
+  sessions Session[]
+  jobs     Job[]
+
+  @@unique([eventId, code])
+  @@index([eventId, whatsapp])
+}
+
+model Session {
+  id         String   @id @default(uuid())
+  eventId    String
+  customerId String
+  code       String
+  status     String   @default("active")
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+
+  event    Event    @relation(fields: [eventId], references: [id])
+  customer Customer @relation(fields: [customerId], references: [id])
+  jobs     Job[]
+
+  @@unique([eventId, code])
+  @@index([customerId])
+}
+
+model Job {
+  id                String      @id @default(uuid())
+  eventId           String
+  customerId        String?
+  sessionId         String?
+  status            JobStatus   @default(queued)
+  mode              String
+  styleId           String
+  provider          ProviderType @default(kie)
+  inputKey          String
+  outputKey         String?
+  outputKeys        Json?
+  errorCode         String?
+  errorMessage      String?
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  event    Event    @relation(fields: [eventId], references: [id])
+  customer Customer? @relation(fields: [customerId], references: [id])
+  session  Session? @relation(fields: [sessionId], references: [id])
+  attempts JobAttempt[]
+  prints   JobPrint[]
+
+  @@index([eventId, createdAt])
+  @@index([customerId, status])
+}
+
+model JobAttempt {
+  id                String   @id @default(uuid())
+  jobId             String
+  attemptNo         Int
+  providerRequestId String?
+  status            String
+  errorMessage      String?
+  createdAt         DateTime @default(now())
+
+  job Job @relation(fields: [jobId], references: [id])
+
+  @@index([jobId, attemptNo])
+}
+
+model JobPrint {
+  id        String   @id @default(uuid())
+  jobId     String
+  type      String   @default("print") // print | download
+  createdAt DateTime @default(now())
+
+  job Job @relation(fields: [jobId], references: [id])
+}
+

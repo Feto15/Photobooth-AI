@@ -17,7 +17,9 @@ import {
 const STYLES = [
     { id: 'cyberpunk', name: 'Cyberpunk', prompt: 'A futuristic cyberpunk humanoid character...' },
     { id: 'royal-thai', name: 'Royal Thai', prompt: 'Photorealistic royal Southeast Asian portrait...' },
+    { id: 'royal-thai-group', name: 'Royal Thai Group', prompt: 'Photorealistic royal Southeast Asian group portrait of 2 to 5 people...' },
 ];
+
 
 export const CapturePage: React.FC = () => {
     const [code, setCode] = useState('');

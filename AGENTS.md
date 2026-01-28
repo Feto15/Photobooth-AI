@@ -4,8 +4,8 @@
 - Sistem “Photobot Event/Booth” adalah web app untuk operator booth (bukan end-user) untuk capture/upload foto, submit proses AI, memantau antrean, dan download/print output.
 - Flow utama: **2-phase** — peserta isi data dulu di tenant (nama + nomor WA) → booth lookup `code/QR` → operator foto → submit job dengan `sessionId` (sinkron data).
 - Opsional: **Pro Camera / Hotfolder** — kamera profesional simpan foto ke folder → watcher auto‑submit job ke queue.
-- Tech: Frontend `Vite + React`, Backend `Node.js + Express`, worker/queue untuk image processing.
-- MVP saat ini diarahkan **tanpa DB**: metadata job & state disimpan via `Redis + BullMQ` (dengan Redis persistence disarankan untuk event).
+- Tech: Frontend `Vite + React`, Backend `Node.js + Express`, worker/queue untuk image processing, **Postgres (Neon) via Prisma**.
+- Data persistent di Postgres; **Redis + BullMQ** khusus untuk queue + state transient (disarankan Redis persistence untuk event).
 - Dokumen:
   - Design: `planning.md`
   - Implementation plan: `implementation-plan.md`
@@ -16,10 +16,16 @@ Project memakai **pnpm** (recommended untuk monorepo/workspaces).
 ### Install
 - `pnpm i`
 
+### Database (Prisma)
+- `pnpm -C packages/db prisma generate`
+- `pnpm -C packages/db prisma migrate dev`
+
 ### Dev
 - `pnpm dev`
 - Per package (jika monorepo): `pnpm --filter <name> dev`
   - Hotfolder watcher: `pnpm --filter @photobot/worker hotfolder`
+  - Prisma migrate (Neon): `pnpm --filter @photobot/db migrate`
+  - Prisma studio: `pnpm --filter @photobot/db studio`
 
 ### Build
 - `pnpm build`
@@ -55,7 +61,7 @@ Project memakai **pnpm** (recommended untuk monorepo/workspaces).
   - Retry/backoff tidak memproses job final dua kali (idempotent worker).
 - Manual smoke test (event mode):
   - Buat job → status `queued/running/succeeded` → download output.
-  - Restart api/worker/redis → antrean & status tidak hilang (Redis persistence).
+- Restart api/worker/redis → antrean & status tidak hilang (Redis persistence).
   - Simulasikan provider down → retry + error message jelas.
   - Tenant create session → QR muncul **tanpa internet**.
   - Hotfolder: set active session → drop file → job auto‑enqueue → output tersedia.
@@ -68,3 +74,6 @@ Project memakai **pnpm** (recommended untuk monorepo/workspaces).
 - Tenant endpoint bersifat public (`POST /sessions`): wajib rate limit + validasi ketat (format WA) + TTL session.
 - CORS allowlist hanya origin UI booth.
 - Sanitasi/validasi input: ukuran file, MIME type allowlist, dan parameter `mode/styleId`.
+- Database:
+  - Simpan `DATABASE_URL` hanya di env (Neon).
+- Jangan commit kredensial DB ke repo.

@@ -5,6 +5,7 @@ import { config } from '../../config';
 import { requireAuth } from '../../middlewares/auth';
 import { CreateSessionRequestSchema, SessionDataSchema, SessionResponseSchema, GetSessionResponseSchema } from '@photobot/shared';
 import { logger } from '../../index';
+import { prisma } from '@photobot/db';
 
 const router = Router();
 
@@ -66,7 +67,7 @@ router.post('/', async (req: Request, res: Response) => {
         const { eventId, name, whatsapp } = parseResult.data;
         const sessionId = uuidv4();
         const createdAt = new Date().toISOString();
-        const expiresAt = new Date(Date.now() + (config.sessionTtlSeconds * 1000)).toISOString();
+        const expiresAt = new Date(Date.now() + (config.sessionTtlSeconds * 1000));
 
         let code = '';
         let stored = false;
@@ -85,11 +86,44 @@ router.post('/', async (req: Request, res: Response) => {
             };
 
             validated = SessionDataSchema.parse(sessionData);
-            const sessionKey = `session:${code}`;
-            const result = await redis.set(sessionKey, JSON.stringify(validated), 'EX', config.sessionTtlSeconds, 'NX');
-            if (result === 'OK') {
+
+            try {
+                await prisma.$transaction(async (tx) => {
+                    await tx.event.upsert({
+                        where: { id: eventId },
+                        update: {},
+                        create: { id: eventId, name: eventId },
+                    });
+
+                    const customer = await tx.customer.create({
+                        data: {
+                            eventId,
+                            name: name.trim(),
+                            whatsapp: whatsapp.trim(),
+                            code,
+                        },
+                    });
+
+                    await tx.session.create({
+                        data: {
+                            id: sessionId,
+                            eventId,
+                            customerId: customer.id,
+                            code,
+                            status: 'active',
+                            expiresAt,
+                            createdAt: new Date(createdAt),
+                        },
+                    });
+                });
+
                 stored = true;
                 break;
+            } catch (error: any) {
+                if (error?.code === 'P2002') {
+                    continue;
+                }
+                throw error;
             }
         }
 
@@ -103,16 +137,12 @@ router.post('/', async (req: Request, res: Response) => {
             });
         }
 
-        // Optional: store reverse lookup
-        const reverseKey = `sessionById:${sessionId}`;
-        await redis.set(reverseKey, JSON.stringify({ code }), 'EX', config.sessionTtlSeconds);
-
         logger.info({ sessionId, code, eventId }, 'Session created');
 
         const response = SessionResponseSchema.parse({
             sessionId,
             code,
-            expiresAt,
+            expiresAt: expiresAt.toISOString(),
         });
 
         res.status(201).json({
@@ -133,7 +163,8 @@ router.post('/', async (req: Request, res: Response) => {
 // GET /sessions/:code (operator-only - requires auth)
 router.get('/:code', requireAuth, async (req: Request, res: Response) => {
     try {
-        const { code } = req.params;
+        const rawCode = req.params.code || '';
+        const code = rawCode.toUpperCase();
 
         // Validate code format
         if (!/^[A-Z0-9]{6}$/.test(code)) {
@@ -145,10 +176,19 @@ router.get('/:code', requireAuth, async (req: Request, res: Response) => {
             });
         }
 
-        const sessionKey = `session:${code}`;
-        const sessionDataStr = await redis.get(sessionKey);
+        const session = await prisma.session.findFirst({
+            where: {
+                code,
+                expiresAt: {
+                    gt: new Date(),
+                },
+            },
+            include: {
+                customer: true,
+            },
+        });
 
-        if (!sessionDataStr) {
+        if (!session || !session.customer) {
             return res.status(404).json({
                 error: {
                     code: 'SESSION_NOT_FOUND',
@@ -157,12 +197,11 @@ router.get('/:code', requireAuth, async (req: Request, res: Response) => {
             });
         }
 
-        const sessionData = JSON.parse(sessionDataStr);
         const response = GetSessionResponseSchema.parse({
-            sessionId: sessionData.sessionId,
-            eventId: sessionData.eventId,
-            name: sessionData.name,
-            whatsapp: sessionData.whatsapp,
+            sessionId: session.id,
+            eventId: session.eventId,
+            name: session.customer.name,
+            whatsapp: session.customer.whatsapp,
         });
 
         logger.info({ sessionId: response.sessionId, code }, 'Session retrieved');

@@ -6,6 +6,7 @@ import { Queue } from 'bullmq';
 import Redis from 'ioredis';
 import pino from 'pino';
 import { StorageClient } from '@photobot/shared';
+import { prisma } from '@photobot/db';
 
 const logger = pino({
     transport: {
@@ -201,6 +202,23 @@ async function processFile(filePath: string): Promise<void> {
         return;
     }
 
+    const session = await prisma.session.findFirst({
+        where: {
+            id: activeSession.sessionId,
+            eventId: activeSession.eventId,
+            expiresAt: { gt: new Date() },
+        },
+        include: {
+            customer: true,
+        },
+    });
+
+    if (!session || !session.customer) {
+        logger.warn({ filePath, sessionId: activeSession.sessionId }, 'Session not found or expired, moving to orphan folder');
+        await moveFile(filePath, config.orphanPath);
+        return;
+    }
+
     // Step 4: Calculate file hash for idempotency
     const fileHash = await getFileHash(filePath);
 
@@ -222,6 +240,20 @@ async function processFile(filePath: string): Promise<void> {
 
     logger.info({ jobId, inputKey }, 'Uploading file to storage');
     await storageClient.putObject(inputKey, fileBuffer, contentType);
+
+    await prisma.job.create({
+        data: {
+            id: jobId,
+            eventId: activeSession.eventId,
+            sessionId: session.id,
+            customerId: session.customer.id,
+            status: 'queued',
+            mode: activeSession.mode || 'portrait',
+            styleId: activeSession.styleId || 'cyber',
+            provider: 'kie',
+            inputKey,
+        },
+    });
 
     // Step 7: Set idempotency before enqueue
     const idempSet = await setIdempotency(activeSession.sessionId, fileHash, jobId);
@@ -339,6 +371,7 @@ async function startWatcher(): Promise<void> {
         await watcher.close();
         await redis.quit();
         await jobQueue.close();
+        await prisma.$disconnect();
         process.exit(0);
     });
 }
