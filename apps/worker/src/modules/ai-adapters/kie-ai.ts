@@ -104,6 +104,7 @@ export class KieAiProvider implements AiProvider {
                 prompt: finalPrompt,
                 aspectRatio,
                 resolution,
+                imageUrls: callbackData.imageUrls,
             },
         };
     }

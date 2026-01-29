@@ -1,6 +1,7 @@
 import dotenv from 'dotenv';
 import { Worker, Job } from 'bullmq';
 import pino from 'pino';
+import axios from 'axios';
 import {
     JobData,
     StorageClient,
@@ -37,6 +38,8 @@ const config = {
     kieCallbackBaseUrl: process.env.KIE_CALLBACK_BASE_URL || '', // e.g. https://your-api.com
     concurrency: parseInt(process.env.WORKER_CONCURRENCY_KIE || '5', 10),
     signedUrlTtl: parseInt(process.env.SIGNED_URL_TTL || '3600', 10),
+    n8nWebhookUrl: process.env.N8N_WEBHOOK_URL || '',
+    n8nWebhookTimeoutMs: parseInt(process.env.N8N_WEBHOOK_TIMEOUT_MS || '10000', 10),
 };
 
 const storageClient = new StorageClient(config.s3);
@@ -105,6 +108,15 @@ const worker = new Worker<JobData, JobReturnValue>(
                 },
             });
 
+            const webhookPayload = await buildWebhookPayload({
+                jobId,
+                inputKey,
+                outputKeys,
+                aiMetadata: aiResult.metadata,
+                eventId,
+            });
+            await sendN8nWebhook(webhookPayload);
+
             return {
                 outputKeys,
                 bestOutputKey: outputKeys[0],
@@ -163,3 +175,76 @@ process.on('SIGINT', async () => {
     await prisma.$disconnect();
     process.exit(0);
 });
+
+async function buildWebhookPayload(params: {
+    jobId: string;
+    inputKey: string;
+    outputKeys: string[];
+    aiMetadata: Record<string, any>;
+    eventId: string;
+}) {
+    const { jobId, inputKey, outputKeys, aiMetadata, eventId } = params;
+    const jobRecord = await prisma.job.findUnique({
+        where: { id: jobId },
+        include: {
+            customer: true,
+            session: true,
+        },
+    });
+
+    const inputSignedUrl = inputKey
+        ? await storageClient.createSignedGetUrl(inputKey, config.signedUrlTtl)
+        : null;
+    const outputSignedUrls = await Promise.all(
+        outputKeys.map((key) => storageClient.createSignedGetUrl(key, config.signedUrlTtl))
+    );
+
+    return {
+        eventId,
+        jobId,
+        status: 'succeeded',
+        mode: jobRecord?.mode ?? null,
+        styleId: jobRecord?.styleId ?? null,
+        provider: jobRecord?.provider ?? 'kie',
+        sessionId: jobRecord?.sessionId ?? null,
+        sessionCode: jobRecord?.session?.code ?? null,
+        customerId: jobRecord?.customerId ?? null,
+        customerName: jobRecord?.customer?.name ?? null,
+        customerWhatsapp: jobRecord?.customer?.whatsapp ?? null,
+        inputKey,
+        inputSignedUrl,
+        outputKeys,
+        outputSignedUrls,
+        bestOutputKey: outputKeys[0] ?? null,
+        aiMetadata,
+        createdAt: jobRecord?.createdAt?.toISOString?.() ?? null,
+        completedAt: new Date().toISOString(),
+    };
+}
+
+async function sendN8nWebhook(payload: any) {
+    if (!config.n8nWebhookUrl) {
+        logger.info('N8N webhook skipped (N8N_WEBHOOK_URL not set)');
+        return;
+    }
+
+    try {
+        const response = await axios.post(config.n8nWebhookUrl, payload, {
+            timeout: config.n8nWebhookTimeoutMs,
+            headers: {
+                'Content-Type': 'application/json',
+            },
+        });
+        logger.info({ jobId: payload?.jobId, status: response.status }, 'N8N webhook sent');
+    } catch (error: any) {
+        logger.warn(
+            {
+                error: error?.message,
+                status: error?.response?.status,
+                data: error?.response?.data,
+                jobId: payload?.jobId,
+            },
+            'Failed to send N8N webhook'
+        );
+    }
+}
