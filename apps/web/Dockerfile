@@ -1,6 +1,7 @@
 FROM node:20-bullseye-slim AS build
 WORKDIR /app
 RUN corepack enable
+RUN corepack prepare pnpm@9.15.5 --activate
 
 # Install dependencies
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./

@@ -1,6 +1,7 @@
 FROM node:20-bullseye-slim AS base
 WORKDIR /app
 RUN corepack enable
+RUN corepack prepare pnpm@9.15.5 --activate
 RUN apt-get update && apt-get install -y --no-install-recommends \
     openssl \
     python3 \
@@ -31,13 +32,6 @@ ENV NODE_ENV=production
 RUN apt-get update && apt-get install -y --no-install-recommends \
     openssl \
   && rm -rf /var/lib/apt/lists/*
-COPY --from=base /app/apps/worker/dist apps/worker/dist
-COPY --from=base /app/apps/worker/package.json apps/worker/package.json
-COPY --from=base /app/node_modules node_modules
-COPY --from=base /app/packages/shared/dist packages/shared/dist
-COPY --from=base /app/packages/shared/package.json packages/shared/package.json
-COPY --from=base /app/packages/db/dist packages/db/dist
-COPY --from=base /app/packages/db/package.json packages/db/package.json
-COPY --from=base /app/packages/db/prisma packages/db/prisma
-COPY --from=base /app/apps/worker/assets apps/worker/assets
+# Copy full app to preserve pnpm workspace node_modules links
+COPY --from=base /app /app
 CMD ["node", "apps/worker/dist/index.js"]
