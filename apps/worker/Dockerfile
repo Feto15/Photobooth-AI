@@ -2,6 +2,7 @@ FROM node:20-bullseye-slim AS base
 WORKDIR /app
 RUN corepack enable
 RUN corepack prepare pnpm@9.15.5 --activate
+ENV npm_config_build_from_source=true
 RUN apt-get update && apt-get install -y --no-install-recommends \
     openssl \
     python3 \
