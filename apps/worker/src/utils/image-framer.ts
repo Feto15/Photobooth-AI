@@ -1,4 +1,4 @@
-import sharp from 'sharp';
+import Jimp from 'jimp';
 import path from 'path';
 import fs from 'fs/promises';
 import pino from 'pino';
@@ -31,7 +31,7 @@ export interface FrameOptions {
 }
 
 /**
- * Menggabungkan foto dengan frame overlay.
+ * Menggabungkan foto dengan frame overlay menggunakan Jimp (Pure JS).
  * Frame harus berformat PNG dengan area transparan di tengah untuk foto.
  * 
  * @param photoBuffer - Buffer foto hasil AI
@@ -54,63 +54,45 @@ export async function applyFrame(
     }
 
     try {
-        // Ambil metadata frame untuk menentukan ukuran output
-        const frameBuffer = await fs.readFile(framePath);
-        const frameMetadata = await sharp(frameBuffer).metadata();
+        // Load foto dan frame memakai Jimp
+        const [photo, frame] = await Promise.all([
+            Jimp.read(photoBuffer),
+            Jimp.read(framePath)
+        ]);
 
-        const outputWidth = options.outputWidth || frameMetadata.width || 1080;
-        const outputHeight = options.outputHeight || frameMetadata.height || 1080;
+        const outputWidth = options.outputWidth || frame.getWidth() || 1080;
+        const outputHeight = options.outputHeight || frame.getHeight() || 1080;
 
         // Hitung ukuran dan posisi foto di dalam frame
-        // Sekarang diubah ke 100% agar memenuhi seluruh area frame
         const photoWidth = options.photoSize?.width || outputWidth;
         const photoHeight = options.photoSize?.height || outputHeight;
         const photoTop = options.photoPosition?.top ?? 0;
         const photoLeft = options.photoPosition?.left ?? 0;
 
         // Proses foto: resize agar pas dengan area frame
-        const resizedPhoto = await sharp(photoBuffer)
-            .resize(photoWidth, photoHeight, {
-                fit: 'cover',
-                position: 'center',
-            })
-            .toBuffer();
+        photo.cover(photoWidth, photoHeight, Jimp.HORIZONTAL_ALIGN_CENTER | Jimp.VERTICAL_ALIGN_MIDDLE);
 
-        // Gabungkan: foto di bawah, frame di atas (overlay)
-        const framedPhoto = await sharp({
-            create: {
-                width: outputWidth,
-                height: outputHeight,
-                channels: 4,
-                background: { r: 0, g: 0, b: 0, alpha: 0 },
-            },
-        })
-            .composite([
-                // Layer 1: Foto (di bawah)
-                {
-                    input: resizedPhoto,
-                    top: photoTop,
-                    left: photoLeft,
-                },
-                // Layer 2: Frame (di atas, overlay)
-                {
-                    input: frameBuffer,
-                    top: 0,
-                    left: 0,
-                },
-            ])
-            .png()
-            .toBuffer();
+        // Siapkan kanvas kosong (background) jika ukurannya berbeda dengan frame
+        // Tapi biasanya kita langsung pakai frame-nya saja sebagai layer utama
+
+        // Buat gambar baru seukuran frame yang diinginkan
+        const background = new Jimp(outputWidth, outputHeight, 0x00000000); // Transparent background
+
+        // Susun: Background -> Foto -> Frame
+        background
+            .composite(photo, photoLeft, photoTop)
+            .composite(frame, 0, 0);
 
         logger.info({
             frameFilename,
             outputSize: `${outputWidth}x${outputHeight}`,
             photoSize: `${photoWidth}x${photoHeight}`,
-        }, 'Frame applied successfully');
+        }, 'Frame applied successfully (using Jimp)');
 
-        return framedPhoto;
+        // Kembalikan dalam format PNG
+        return await background.getBufferAsync(Jimp.MIME_PNG);
     } catch (error: any) {
-        logger.error({ error: error.message, framePath }, 'Failed to apply frame');
+        logger.error({ error: error.message, framePath }, 'Failed to apply frame with Jimp');
         // Jika gagal, kembalikan foto asli tanpa frame
         return photoBuffer;
     }
