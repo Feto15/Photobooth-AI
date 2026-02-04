@@ -9,6 +9,7 @@ import {
 } from '@photobot/shared';
 import { KieAiProvider, KieAiError } from './modules/ai-adapters/kie-ai';
 import { prisma } from '@photobot/db';
+import { applyFrame, hasDefaultFrame } from './utils/image-framer';
 
 dotenv.config();
 
@@ -55,6 +56,7 @@ const worker = new Worker<JobData, JobReturnValue>(
         const {
             jobId,
             eventId,
+            sessionId,
             inputKey,
             mode,
             styleId
@@ -75,7 +77,7 @@ const worker = new Worker<JobData, JobReturnValue>(
             logger.info({ jobId, inputKey }, 'Generated signed URL for input');
 
             await job.updateProgress({ percent: 10, stage: 'ai_processing' });
-            
+
             // Process with callback mode - will wait for callback via Redis pub/sub
             const aiResult = await aiProvider.process({
                 inputImageBytes: Buffer.alloc(0),
@@ -87,12 +89,28 @@ const worker = new Worker<JobData, JobReturnValue>(
 
             logger.info({ jobId, taskId: aiResult.metadata.taskId }, 'AI processing completed');
 
-            await job.updateProgress({ percent: 80, stage: 'uploading_output' });
+            await job.updateProgress({ percent: 80, stage: 'applying_frame' });
+
+            // Apply frame to each output image (if frame exists)
+            const framedOutputs: Buffer[] = [];
+            const frameAvailable = await hasDefaultFrame();
+
+            for (let i = 0; i < aiResult.outputs.length; i++) {
+                if (frameAvailable) {
+                    const framedImage = await applyFrame(aiResult.outputs[i]);
+                    framedOutputs.push(framedImage);
+                    logger.info({ jobId, outputIndex: i + 1 }, 'Frame applied to output');
+                } else {
+                    framedOutputs.push(aiResult.outputs[i]);
+                }
+            }
+
+            await job.updateProgress({ percent: 90, stage: 'uploading_output' });
 
             const outputKeys: string[] = [];
-            for (let i = 0; i < aiResult.outputs.length; i++) {
+            for (let i = 0; i < framedOutputs.length; i++) {
                 const key = StorageClient.buildKey(eventId, jobId, 'output', 'png', i + 1);
-                await storageClient.putObject(key, aiResult.outputs[i], 'image/png');
+                await storageClient.putObject(key, framedOutputs[i], 'image/png');
                 outputKeys.push(key);
                 logger.info({ jobId, key }, 'Uploaded output image');
             }
@@ -107,6 +125,15 @@ const worker = new Worker<JobData, JobReturnValue>(
                     outputKeys,
                 },
             });
+
+            // Update session status to 'done' so participant is removed from active queue
+            if (sessionId) {
+                await prisma.session.update({
+                    where: { id: sessionId },
+                    data: { status: 'done' },
+                });
+                logger.info({ jobId, sessionId }, 'Session marked as done');
+            }
 
             const webhookPayload = await buildWebhookPayload({
                 jobId,

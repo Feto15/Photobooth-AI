@@ -8,6 +8,7 @@ Dokumen ini adalah rencana implementasi teknis (tanpa timeline) yang menurunkan 
 - Auth operator + UI minimal (Tenant form + QR offline, Login, Lookup+Capture/Upload, Queue, Job Detail).
 - `POST /jobs`, `GET /jobs/:id`, `GET /jobs/:id/download`.
 - `POST /sessions` (public tenant) + `GET /sessions/:code` (operator lookup).
+- (Opsional, 1 booth) **Stoper panel**: list peserta registrasi (`GET /sessions/list`) + tombol **Set Active** (tanpa input kode manual).
 - **Hotfolder (Pro Camera)**: watcher + active session booth (optional but supported).
 - Queue + worker terpisah untuk AI processing.
 - Storage S3-compatible untuk input/output + signed URL.
@@ -145,12 +146,14 @@ Untuk pro camera (hotfolder), simpan sesi aktif booth:
 - Input: `{ sessionId, eventId, mode, styleId }`
 - Simpan ke Redis `activeSession:{boothId}` + TTL
 - Return data sesi aktif + TTL
+- Jika booth sudah punya active session berbeda: `409 BOOTH_BUSY` (mencegah salah foto orang).
 
 #### `GET /booth/:boothId/active-session`
 - Return sesi aktif dan `ttlSecondsRemaining`
+- Jika tidak ada sesi aktif: `200 { data: null }`
 
 #### `DELETE /booth/:boothId/active-session`
-- Clear active session
+- Clear active session (idempotent; booth sudah kosong tetap `200`)
 
 #### `POST /booth/:boothId/active-session/refresh`
 - Refresh TTL (dipanggil watcher saat file masuk)
@@ -161,7 +164,7 @@ Untuk pro camera (hotfolder), simpan sesi aktif booth:
 - Langkah:
   1) validasi format `whatsapp` + `name`
   2) generate `sessionId` + `code`
-  3) `SET session:{code} ... EX <ttl>`
+  3) insert `customer` + `session` ke Postgres (`status=active`, `expiresAt`)
   4) return `{ sessionId, code, expiresAt }`
 - Security:
   - rate limit per IP/device
@@ -170,6 +173,15 @@ Untuk pro camera (hotfolder), simpan sesi aktif booth:
 #### `GET /sessions/:code` (operator-only)
 - Validasi auth operator.
 - Return `{ sessionId, name, whatsapp, eventId }` atau `404`.
+
+#### `GET /sessions/list` (operator-only; stoper)
+- Query:
+  - `eventId` (required)
+  - `status` (`active|ready|used|done`, default `active`)
+  - `limit` (1–100, default 50)
+  - `q` (optional search by `name`/`whatsapp`)
+- Output: list item `{ sessionId, code, name, whatsapp, createdAt }`
+- Dipakai UI stoper untuk pilih peserta dan Set Active.
 
 ## 5) Storage adapter
 Buat modul `StorageClient` dengan interface:
@@ -195,8 +207,14 @@ Queue payload minimal: job `data` BullMQ (source of truth ada di Postgres; Redis
 2. `job.updateProgress({ percent: 1, stage: 'preprocessing' })`.
 3. Download input bytes dari storage (pakai `inputKey`).
 4. `job.updateProgress({ percent: 30, stage: 'ai_processing' })` lalu panggil AI adapter.
-5. `job.updateProgress({ percent: 80, stage: 'uploading_output' })` lalu upload output ke storage.
-6. Return value job: `{ outputKeys, bestOutputKey, providerRequestId, seed?, ... }` dan `job.updateProgress({ percent: 100, stage: 'done' })`.
+5. (Opsional) `job.updateProgress({ percent: 80, stage: 'applying_frame' })` lalu apply frame overlay (jika frame tersedia).
+6. `job.updateProgress({ percent: 90, stage: 'uploading_output' })` lalu upload output ke storage.
+7. Update Postgres:
+   - `jobs.status = succeeded|failed`
+   - simpan `outputKey/outputKeys/errorMessage`
+   - mark `sessions.status = done` setelah sukses (anti dipakai ulang).
+8. (Opsional) kirim webhook (n8n/WA) setelah sukses.
+9. Return value job: `{ outputKeys, bestOutputKey, providerRequestId, seed?, ... }` dan `job.updateProgress({ percent: 100, stage: 'done' })`.
 
 ### 6.3 Retry/backoff dan klasifikasi error
 - Map error ke:
@@ -244,6 +262,10 @@ Buat interface `AiProvider`:
 - Capture/Upload:
   - lookup session by `code` (scan/input)
   - tampil `name + whatsapp` read-only (sinkron)
+  - (Opsional) **Stoper panel**:
+    - list peserta registrasi `active/ready` + search `q`
+    - tombol **Set Active**
+    - handle `409 BOOTH_BUSY` + tombol “Force Clear Booth”
   - webcam via `getUserMedia`
   - preview + retake
   - submit job (multipart to backend)
@@ -297,6 +319,7 @@ Buat interface `AiProvider`:
 - `OPERATOR_PASSWORD` (MVP single operator)
 - `REDIS_URL`
 - `DATABASE_URL` (Neon Postgres)
+- `DIRECT_URL` (Neon Postgres direct/non-pooler; recommended for Prisma migrate)
 - `SESSION_TTL_SECONDS` (mis. 21600 untuk 6 jam)
 - `ACTIVE_SESSION_TTL_SECONDS` (mis. 1800)
 - `S3_ENDPOINT` (optional untuk MinIO/R2)
@@ -308,10 +331,13 @@ Buat interface `AiProvider`:
 
 **WORKER**
 - `REDIS_URL`
+- `DATABASE_URL` (Neon Postgres; wajib untuk update status/output)
 - `S3_*` (sama)
 - `AI_PROVIDER_DEFAULT` (`kie|comfy`)
 - `KIE_API_KEY`
 - `KIE_API_BASE_URL` (optional)
+- `N8N_WEBHOOK_URL` (optional; trigger setelah AI sukses untuk kirim WA via n8n)
+- `N8N_WEBHOOK_TIMEOUT_MS` (optional)
 - `COMFY_API_BASE_URL` (phase 2)
 - `WORKER_CONCURRENCY_KIE`
 - `WORKER_CONCURRENCY_COMFY`
@@ -339,6 +365,8 @@ Buat interface `AiProvider`:
   - restart api/worker → job status tidak hilang
   - retry job setelah failure
   - tenant: create session → QR muncul tanpa internet
+  - stoper: list `active` → Set Active → session jadi `ready` → create job → session jadi `used`
+  - worker: job succeed → session jadi `done` → webhook n8n terkirim (optional)
   - hotfolder: set active session → drop file → job auto‑enqueue → output tersedia
 
 ## 13) Perintah kerja (pnpm)

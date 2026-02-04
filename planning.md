@@ -17,14 +17,16 @@ Flow ini diasumsikan memakai **2-phase**: peserta isi data dulu (tenant), baru b
 
 1. Operator login.
 2. Operator memilih `event` (atau otomatis berdasarkan booth) dan memilih `mode/style`.
-3. Operator meminta peserta menunjukkan **kode/QR** hasil registrasi (tenant).
-4. Operator input/scan `code` → sistem melakukan lookup session (`GET /sessions/:code`) dan menampilkan `nama` + `nomor WA` agar sinkron.
+3. Operator/stoper memilih peserta:
+   - **Mode kode**: peserta menunjukkan `code/QR` hasil registrasi (tenant) → operator lookup (`GET /sessions/:code`).
+   - **Mode stoper (1 booth)**: stoper memilih peserta dari daftar registrasi → klik **Set Active** (tanpa input kode).
 5. Operator memilih mode capture:
    - **Mode Manual**: ambil foto via webcam/upload.
    - **Mode Pro Camera (Hot Folder)**: aktifkan “Start Capture” untuk menerima file otomatis dari folder kamera profesional.
 6. UI membuat *job* (`POST /jobs`) dengan `sessionId` + foto + parameter style/mode (manual), **atau** watcher otomatis meng‑enqueue job (pro camera).
 7. UI menampilkan job masuk antrean: `queued` → `running`.
 8. Saat selesai (`succeeded`), operator membuka detail job untuk preview dan download/print.
+   - (Opsional) sistem otomatis mengirim notifikasi WhatsApp via webhook (mis. n8n) berisi link output.
 9. Jika gagal (`failed`), operator dapat retry (dengan parameter sama) atau submit ulang.
 
 ## 2a) User flow tenant (peserta) — step-by-step
@@ -35,6 +37,13 @@ Flow ini diasumsikan memakai **2-phase**: peserta isi data dulu (tenant), baru b
    - (opsional) konfirmasi data yang tersimpan.
 4. Peserta menuju booth dan menunjukkan `code/QR` ke operator.
 
+## 2b) User flow stoper (opsional, 1-booth)
+1. Stoper login (operator auth).
+2. Stoper membuka halaman capture dan melihat daftar peserta yang registrasi (`GET /sessions/list?eventId=...&status=active`).
+3. Stoper panggil/konfirmasi peserta, lalu klik **Set Active** → backend set booth active session (`POST /booth/:boothId/active-session`) dan menandai session `ready`.
+4. Photographer/operator mengambil foto dan submit job (`POST /jobs`) → session ditandai `used`.
+5. Saat job selesai, worker menandai session `done` (untuk history/anti double use).
+
 ## 3) Arsitektur komponen
 ### Komponen
 - **Frontend (Vite + React)**:
@@ -44,6 +53,7 @@ Flow ini diasumsikan memakai **2-phase**: peserta isi data dulu (tenant), baru b
 - **Database (Postgres/Neon)**: data permanen `events/customers/sessions/jobs`.
 - **Queue/Worker**:
   - Worker AI: pemrosesan image/AI; update progress/status; simpan output ke storage.
+  - (Opsional) Notifikasi: kirim payload job+sesi+output URL ke webhook (mis. n8n) untuk WA blasting.
   - **Hotfolder Watcher**: memantau folder kamera pro, auto‑upload + enqueue job jika ada active session.
 - **Storage (S3-compatible atau lokal)**: menyimpan input image dan output image; akses via signed URL.
 - **AI provider**:
@@ -87,6 +97,7 @@ Flow ini diasumsikan memakai **2-phase**: peserta isi data dulu (tenant), baru b
 │ - call AI provider        │
 │ - store output            │
 │ - update status/progress  │
+│ - (optional) webhook n8n   │
 └───────┬─────────┬────────┘
         │         │
         │         ├───────────────┐
@@ -96,6 +107,12 @@ Flow ini diasumsikan memakai **2-phase**: peserta isi data dulu (tenant), baru b
 │ kie.ai (A)   │  │ ComfyUI (B)  │
 │ external API │  │ self-hosted  │
 └──────────────┘  └──────────────┘
+        \
+         \ (optional) POST webhook payload
+          v
+     ┌──────────────────┐
+     │ n8n / WA sender   │
+     └──────────────────┘
 ```
 
 ## 4) Desain API backend
@@ -109,6 +126,24 @@ Flow ini diasumsikan memakai **2-phase**: peserta isi data dulu (tenant), baru b
 - Tambahan 2-phase:
   - Buat **session** saat tenant submit data.
   - Operator hanya mengirim `sessionId` saat create job agar data peserta sinkron.
+
+### Endpoint: Sessions (tenant + stoper)
+- `POST /sessions` (public tenant): membuat session + `code`.
+- `GET /sessions/:code` (operator): lookup participant untuk flow kode.
+- `GET /sessions/list` (operator/stoper): list peserta yang sudah registrasi.
+
+**State session (minimal)**:
+- `active` (baru registrasi / pending)
+- `ready` (sudah dipanggil stoper, siap difoto)
+- `used` (job sudah dibuat/enqueue)
+- `done` (job selesai diproses)
+
+#### `GET /sessions/list`
+Query:
+- `eventId` (required)
+- `status` (`active|ready|used|done`, default `active`)
+- `limit` (1–100, default 50)
+- `q` (optional search by name/whatsapp)
 
 ### Endpoint: Auth (minimal)
 - `POST /auth/login`
@@ -477,6 +512,7 @@ Worker memanggil “AI Adapter” yang menyamakan interface:
   - Foto mentah (input) punya retention lebih pendek dari output jika memungkinkan.
   - Log tidak menyimpan base64 image atau URL publik; hanya key storage + jobId.
   - Signed URL TTL pendek.
+  - Jika kirim notifikasi WA via webhook (mis. n8n): gunakan endpoint private + optional secret header/HMAC, dan kirim minimal data yang diperlukan.
 
 ## 10) Observability minimal
 ### Log yang wajib
@@ -545,6 +581,7 @@ Implementasi bisa sesederhana:
 - Definisikan data model job (status, provider, storage keys, metadata, retention).
 - Implement backend Express + auth operator (JWT) + role/event scoping.
 - Implement `POST /jobs` (MVP multipart) + validasi + dedup/idempotency.
+- Implement stoper flow: `GET /sessions/list` + tombol Set Active + handle `409 BOOTH_BUSY`.
 - Setup storage adapter (S3-compatible) + signed URL untuk output.
 - Setup BullMQ + Redis + worker basic pipeline (download input → process → upload output → update status).
 - Implement AI adapter untuk Opsi A (kie.ai) dengan timeout/retry + error mapping.
@@ -585,9 +622,14 @@ Response:
 
 #### `GET /booth/:boothId/active-session`
 Mengambil sesi aktif saat ini untuk booth.
+- Jika tidak ada sesi aktif: `200 { "data": null }`.
 
 #### `DELETE /booth/:boothId/active-session`
 Menonaktifkan sesi aktif (stop capture).
+- Idempotent: jika booth sudah kosong tetap `200` (tidak error).
 
 #### `POST /booth/:boothId/active-session/refresh`
 Refresh TTL (dipakai watcher saat file masuk).
+
+**Error khusus**
+- `409 BOOTH_BUSY`: jika booth sudah punya active session yang berbeda (mencegah salah foto orang).

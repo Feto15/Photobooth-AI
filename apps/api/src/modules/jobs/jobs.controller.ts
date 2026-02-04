@@ -303,6 +303,12 @@ router.post('/', requireAuth, upload.single('image'), async (req: AuthRequest, r
                     delay: 5000,
                 },
             });
+
+            // Update session status to "used" after job created successfully
+            await prisma.session.update({
+                where: { id: session.id },
+                data: { status: 'used' },
+            });
         } catch (enqueueError: any) {
             await prisma.job.update({
                 where: { id: jobId },

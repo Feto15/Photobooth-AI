@@ -27,3 +27,6 @@ pnpm build
 
 # 5. STOP INFRASTRUCTURE
 cd infra/docker && docker-compose down
+
+pnpm --filter @photobot/worker hotfolder
+

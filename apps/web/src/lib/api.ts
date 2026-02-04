@@ -64,6 +64,28 @@ export async function getSession(code: string): Promise<SessionData> {
     return response.data.data;
 }
 
+// Session List (for stoper)
+export interface SessionListItem {
+    sessionId: string;
+    code: string;
+    name: string;
+    whatsapp: string;
+    createdAt: string;
+}
+
+export interface SessionListResponse {
+    sessions: SessionListItem[];
+}
+
+export async function getSessionList(eventId: string, status: string = 'active', q?: string): Promise<SessionListResponse> {
+    const params: Record<string, string> = { eventId, status };
+    if (q && q.trim().length > 0) {
+        params.q = q.trim();
+    }
+    const response = await api.get('/sessions/list', { params });
+    return response.data.data;
+}
+
 // Jobs
 export interface CreateJobParams {
     sessionId: string;

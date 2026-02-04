@@ -3,6 +3,7 @@
 ## Project overview
 - Sistem “Photobot Event/Booth” adalah web app untuk operator booth (bukan end-user) untuk capture/upload foto, submit proses AI, memantau antrean, dan download/print output.
 - Flow utama: **2-phase** — peserta isi data dulu di tenant (nama + nomor WA) → booth lookup `code/QR` → operator foto → submit job dengan `sessionId` (sinkron data).
+- Opsional: **Stoper flow (1-booth)** — stoper melihat list peserta yang sudah daftar (`GET /sessions/list`) lalu klik **Set Active** untuk mengaktifkan booth (tanpa input kode manual).
 - Opsional: **Pro Camera / Hotfolder** — kamera profesional simpan foto ke folder → watcher auto‑submit job ke queue.
 - Tech: Frontend `Vite + React`, Backend `Node.js + Express`, worker/queue untuk image processing, **Postgres (Neon) via Prisma**.
 - Data persistent di Postgres; **Redis + BullMQ** khusus untuk queue + state transient (disarankan Redis persistence untuk event).
@@ -65,6 +66,7 @@ Project memakai **pnpm** (recommended untuk monorepo/workspaces).
   - Simulasikan provider down → retry + error message jelas.
   - Tenant create session → QR muncul **tanpa internet**.
   - Hotfolder: set active session → drop file → job auto‑enqueue → output tersedia.
+  - Stoper: list session `active` → Set Active → booth busy (409) handled → job created → session status `used` → worker mark `done`.
 
 ## Security considerations
 - Jangan expose API key di frontend; simpan di env backend/worker.
@@ -76,4 +78,7 @@ Project memakai **pnpm** (recommended untuk monorepo/workspaces).
 - Sanitasi/validasi input: ukuran file, MIME type allowlist, dan parameter `mode/styleId`.
 - Database:
   - Simpan `DATABASE_URL` hanya di env (Neon).
+  - Jika pakai Neon pooler (pgBouncer): tambahkan `pgbouncer=true` di `DATABASE_URL` dan set `DIRECT_URL` (non-pooler) untuk migrasi.
 - Jangan commit kredensial DB ke repo.
+- PII: endpoint list peserta (`GET /sessions/list`) berisi `name/whatsapp` → idealnya dibatasi role (stoper-only) sebelum production.
+- Notifikasi WA via n8n (optional): simpan `N8N_WEBHOOK_URL` di env worker dan amankan endpoint n8n (secret header/HMAC).

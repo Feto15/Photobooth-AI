@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import chokidar from 'chokidar';
 import fs from 'fs/promises';
 import path from 'path';
@@ -147,12 +148,12 @@ async function getActiveSession(boothId: string): Promise<ActiveSessionData | nu
 }
 
 /**
- * Refresh active session TTL (extends session when file arrives)
+ * Clear active session from Redis (one photo per person mode)
  */
-async function refreshActiveSessionTTL(boothId: string): Promise<void> {
+async function clearActiveSession(boothId: string): Promise<void> {
     const key = `${ACTIVE_SESSION_KEY_PREFIX}${boothId}`;
-    await redis.expire(key, ACTIVE_SESSION_TTL_SECONDS);
-    logger.info({ boothId }, 'Active session TTL refreshed');
+    await redis.del(key);
+    logger.info({ boothId }, 'Active session cleared from Redis');
 }
 
 /**
@@ -300,8 +301,8 @@ async function processFile(filePath: string): Promise<void> {
         inputKey,
     }, 'Job enqueued from hotfolder');
 
-    // Step 9: Refresh active session TTL
-    await refreshActiveSessionTTL(config.boothId);
+    // Step 9: Clear active session from Redis (one photo per person)
+    await clearActiveSession(config.boothId);
 
     // Step 10: Move file to processed folder
     await moveFile(filePath, config.processedPath);
@@ -340,7 +341,12 @@ async function startWatcher(): Promise<void> {
 
     watcher.on('add', async (filePath: string) => {
         // Only process files directly in hotfolder, not in subdirs
-        if (path.dirname(filePath) !== path.resolve(config.hotfolderPath)) {
+        const absoluteFilePath = path.resolve(filePath);
+        const absoluteHotfolderPath = path.resolve(config.hotfolderPath);
+
+        // Only process files directly in hotfolder, not in subdirs
+        if (path.dirname(absoluteFilePath) !== absoluteHotfolderPath) {
+            logger.debug({ filePath, dirname: path.dirname(absoluteFilePath), hotfolderPath: absoluteHotfolderPath }, 'Ignored file (in subdirectory)');
             return;
         }
 

@@ -107,6 +107,34 @@ router.post('/:boothId/active-session', requireAuth, async (req: AuthRequest, re
             });
         }
 
+        // Check if booth already has an active session (different from the one being set)
+        const activeSessionKey = `${ACTIVE_SESSION_KEY_PREFIX}${boothId}`;
+        const existingActiveSession = await redis.get(activeSessionKey);
+
+        if (existingActiveSession) {
+            const existing = JSON.parse(existingActiveSession) as ActiveSessionData;
+            // If there's already an active session with a different sessionId, return 409
+            if (existing.sessionId !== session.id) {
+                return res.status(409).json({
+                    error: {
+                        code: 'BOOTH_BUSY',
+                        message: 'Booth sudah memiliki peserta aktif. Selesaikan atau clear session aktif terlebih dahulu.',
+                        details: {
+                            activeSessionId: existing.sessionId,
+                            activeName: existing.name,
+                            activeCode: existing.code,
+                        },
+                    },
+                });
+            }
+        }
+
+        // Update session status to "ready" (stoper activated)
+        await prisma.session.update({
+            where: { id: session.id },
+            data: { status: 'ready' },
+        });
+
         // Build active session data
         const activeSessionData: ActiveSessionData = {
             sessionId: session.id,
@@ -121,7 +149,6 @@ router.post('/:boothId/active-session', requireAuth, async (req: AuthRequest, re
         };
 
         // Store in Redis with TTL
-        const activeSessionKey = `${ACTIVE_SESSION_KEY_PREFIX}${boothId}`;
         await redis.set(
             activeSessionKey,
             JSON.stringify(activeSessionData),
@@ -163,10 +190,11 @@ router.delete('/:boothId/active-session', requireAuth, async (req: AuthRequest, 
         const deleted = await redis.del(activeSessionKey);
 
         if (deleted === 0) {
-            return res.status(404).json({
-                error: {
-                    code: 'NO_ACTIVE_SESSION',
-                    message: 'No active session found for this booth',
+            return res.status(200).json({
+                data: {
+                    boothId,
+                    cleared: true,
+                    message: 'Booth was already empty',
                 },
             });
         }
@@ -203,11 +231,8 @@ router.get('/:boothId/active-session', requireAuth, async (req: AuthRequest, res
         const activeSessionStr = await redis.get(activeSessionKey);
 
         if (!activeSessionStr) {
-            return res.status(404).json({
-                error: {
-                    code: 'NO_ACTIVE_SESSION',
-                    message: 'No active session found for this booth',
-                },
+            return res.status(200).json({
+                data: null,
             });
         }
 

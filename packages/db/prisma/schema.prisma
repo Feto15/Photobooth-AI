@@ -5,6 +5,8 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+  // Recommended: use pooled URL (Neon pooler/pgBouncer) for runtime and direct URL for migrations.
+  directUrl = env("DIRECT_URL")
 }
 
 enum JobStatus {
@@ -116,4 +118,3 @@ model JobPrint {
 
   job Job @relation(fields: [jobId], references: [id])
 }
-

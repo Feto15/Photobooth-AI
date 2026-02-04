@@ -35,3 +35,20 @@ export const GetSessionResponseSchema = z.object({
 });
 
 export type GetSessionResponse = z.infer<typeof GetSessionResponseSchema>;
+
+// Session List (for stoper)
+export const SessionListItemSchema = z.object({
+    sessionId: z.string().uuid(),
+    code: z.string(),
+    name: z.string(),
+    whatsapp: z.string(),
+    createdAt: z.string(),
+});
+
+export type SessionListItem = z.infer<typeof SessionListItemSchema>;
+
+export const SessionListResponseSchema = z.object({
+    sessions: z.array(SessionListItemSchema),
+});
+
+export type SessionListResponse = z.infer<typeof SessionListResponseSchema>;

@@ -1,9 +1,10 @@
 import { Router, Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
+import { z } from 'zod';
 import { redis } from '../../config/redis';
 import { config } from '../../config';
 import { requireAuth } from '../../middlewares/auth';
-import { CreateSessionRequestSchema, SessionDataSchema, SessionResponseSchema, GetSessionResponseSchema } from '@photobot/shared';
+import { CreateSessionRequestSchema, SessionDataSchema, SessionResponseSchema, GetSessionResponseSchema, SessionListResponseSchema } from '@photobot/shared';
 import { logger } from '../../index';
 import { prisma } from '@photobot/db';
 
@@ -155,6 +156,94 @@ router.post('/', async (req: Request, res: Response) => {
             error: {
                 code: 'INTERNAL_ERROR',
                 message: error.message || 'Failed to create session',
+            },
+        });
+    }
+});
+
+// Zod schema for GET /sessions/list query params
+const ListSessionsQuerySchema = z.object({
+    eventId: z.string().min(1, 'eventId is required'),
+    status: z.enum(['active', 'ready', 'done', 'used']).optional().default('active'),
+    limit: z.coerce.number().min(1).max(100).optional().default(50),
+    q: z.string().optional(),
+});
+
+// GET /sessions/list (operator-only - list pending sessions for stoper)
+router.get('/list', requireAuth, async (req: Request, res: Response) => {
+    try {
+        // Validate query params
+        const parseResult = ListSessionsQuerySchema.safeParse(req.query);
+        if (!parseResult.success) {
+            return res.status(400).json({
+                error: {
+                    code: 'VALIDATION_ERROR',
+                    message: 'Invalid query parameters',
+                    details: parseResult.error.errors.map(e => ({
+                        field: e.path.join('.'),
+                        reason: e.message,
+                    })),
+                },
+            });
+        }
+
+        const { eventId, status, limit, q } = parseResult.data;
+
+        // Build where clause
+        const where: any = {
+            eventId,
+            status,
+            expiresAt: {
+                gt: new Date(),
+            },
+        };
+
+        // Add search filter if q is provided
+        if (q && q.trim().length > 0) {
+            const searchTerm = q.trim();
+            where.customer = {
+                OR: [
+                    { name: { contains: searchTerm, mode: 'insensitive' } },
+                    { whatsapp: { contains: searchTerm } },
+                ],
+            };
+        }
+
+        const sessions = await prisma.session.findMany({
+            where,
+            include: {
+                customer: true,
+            },
+            orderBy: {
+                createdAt: 'desc',
+            },
+            take: limit,
+        });
+
+        const sessionList = sessions
+            .filter(s => s.customer)
+            .map(s => ({
+                sessionId: s.id,
+                code: s.code,
+                name: s.customer!.name,
+                whatsapp: s.customer!.whatsapp,
+                createdAt: s.createdAt.toISOString(),
+            }));
+
+        const response = SessionListResponseSchema.parse({ sessions: sessionList });
+
+        logger.info({ eventId, status, q, count: sessionList.length }, 'Session list retrieved');
+
+        res.json({
+            data: response,
+        });
+
+    } catch (error: any) {
+        logger.error({ error }, 'Failed to get session list');
+        res.status(500).json({
+            error: {
+                code: 'INTERNAL_ERROR',
+                message: error.message || 'Failed to get session list',
             },
         });
     }

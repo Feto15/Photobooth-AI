@@ -7,6 +7,10 @@ dist/
 build/
 .next/
 
+# Local runtime folders
+apps/worker/hotfolder/
+apps/worker/assets/
+
 # Environment files
 .env
 .env.local
