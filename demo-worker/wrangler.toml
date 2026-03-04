@@ -1,0 +1,11 @@
+name = "photobooth-demo-worker"
+main = "src/index.ts"
+compatibility_date = "2026-03-04"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "photobooth-demo"
+database_id = "bb4ca6b7-acbd-4d35-a50c-d82ab251e3c7"
+
+[vars]
+APPS_SCRIPT_URL = ""

@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Event Pass</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:wght@300;400;600&family=Source+Sans+3:wght@300;400;600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark"></div>
+          <div class="brand-text">
+            <div class="brand-title">Corporate Event</div>
+            <div class="brand-subtitle">Participant Pass</div>
+          </div>
+        </div>
+        <div class="right-badges">
+          <div class="pill" id="viewBadge">PASS</div>
+          <div class="badge" id="codeBadge">CODE</div>
+        </div>
+      </header>
+
+      <main class="content">
+        <section class="hero">
+          <div class="hero-left">
+            <p class="eyebrow">Welcome</p>
+            <h1 id="participantName">Participant Name</h1>
+            <p class="lead" id="participantMeta">Email • Phone</p>
+            <div class="cta-row">
+              <a class="btn primary" id="itineraryLink" href="#">View Itinerary</a>
+              <a class="btn ghost" id="downloadPass" href="#">Download Pass</a>
+            </div>
+          </div>
+          <div class="hero-right">
+            <div class="card">
+              <div class="card-title">Event Info</div>
+              <div class="card-item" id="eventName">Event Name</div>
+              <div class="card-item" id="eventDate">Date</div>
+              <div class="card-item" id="eventVenue">Venue</div>
+              <div class="divider"></div>
+              <div class="card-title">Photo Booth</div>
+              <div class="card-item">Scan your QR at the booth</div>
+              <div class="card-item">Your results will be emailed</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="schedule">
+          <div class="section-title">Today’s Highlights</div>
+          <div class="timeline" id="timeline"></div>
+        </section>
+
+        <section class="note">
+          <div class="note-title">Your QR</div>
+          <div class="note-body">
+            <div class="qr-wrap">
+              <img id="qrImage" alt="QR Code" />
+            </div>
+            <div class="note-text">
+              Use this QR for photo booth registration. If QR fails, show your code:
+              <span class="mono" id="codeInline">CODE</span>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer class="footer">
+        <div>Need help? Contact the event desk.</div>
+        <div class="mono" id="footerCode">CODE</div>
+      </footer>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
